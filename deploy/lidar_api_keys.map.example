@@ -1,0 +1,17 @@
+# /etc/nginx/lidar_api_keys.map
+#
+# One line per allowed API key. Format:
+#   "the-key-value"   1;
+#
+# Generate strong keys with:
+#   python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+#
+# Rotate by adding the new key, deploying it to the Next.js app, then removing
+# the old one. nginx reads this on reload (sudo systemctl reload nginx).
+#
+# Permissions:
+#   sudo chown root:root /etc/nginx/lidar_api_keys.map
+#   sudo chmod 600 /etc/nginx/lidar_api_keys.map
+
+# Example - REPLACE WITH REAL KEYS:
+"replace_this_with_a_real_token_urlsafe_value_at_least_32_chars"   1;

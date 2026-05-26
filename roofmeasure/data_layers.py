@@ -1,5 +1,5 @@
 """Google Solar API dataLayers fetcher + per-facet polygon extraction.""" 
-# AUTO_DEPLOY_TEST_2026_05_25
+# AUTO_DEPLOY_TEST_v2_works_from_local
 from __future__ import annotations
 
 import io

@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import requests
-
+from roofmeasure.data_layers import add_polygons_to_facets
 LOG = logging.getLogger(__name__)
 
 SOLAR_API_BASE = "https://solar.googleapis.com/v1"
@@ -323,6 +323,16 @@ def measure_via_solar_api(
 
     Raises SolarApiNotFoundError if no coverage at the point.
     """
+    api_key = api_key or os.environ.get("GOOGLE_SOLAR_API_KEY") or os.environ.get("GOOGLE_MAPS_API_KEY")
     result = fetch_building_insights(lat, lon, api_key=api_key,
                                      required_quality=required_quality)
+    try:
+        add_polygons_to_facets(
+            result.facets,
+            result.center_lat or lat,
+            result.center_lon or lon,
+            api_key=api_key or "",
+        )
+    except Exception:
+        LOG.exception("data_layers polygon extraction failed; continuing without polygons")
     return solar_result_to_measurement_dict(result, address, **pricing_kwargs)

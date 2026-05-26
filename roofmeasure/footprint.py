@@ -114,7 +114,7 @@ def _query_overpass(lat: float, lon: float, radius_m: int = 60) -> Optional[dict
     last_err = None
     for url in OVERPASS_ENDPOINTS:
         try:
-            r = requests.post(url, data={"data": query}, timeout=30)
+            r = requests.post(url, data={"data": query}, timeout=30, headers={"User-Agent": "RoofMeasureEngine/0.1 (https://roofmeasure.canadasroofer.com)"})
             if r.status_code == 200:
                 return r.json()
             last_err = f"{url} -> {r.status_code}"

@@ -63,7 +63,7 @@ class RoofSegmentation:
 # Step 1: ground filter
 # ---------------------------------------------------------------------------
 
-def filter_to_roof_returns(points: np.ndarray, min_hag_m: float = 1.5) -> Tuple[np.ndarray, float]:
+def filter_to_roof_returns(points: np.ndarray, min_hag_m: float = 1.0) -> Tuple[np.ndarray, float]:
     """Drop ground/low vegetation. Return (roof_candidate_points, ground_z)."""
     if len(points) == 0:
         return points, 0.0
@@ -91,7 +91,7 @@ def _fit_plane_lstsq(points: np.ndarray) -> Tuple[np.ndarray, float]:
 
 
 def _ransac_plane(points: np.ndarray, threshold_m: float = 0.15,
-                  max_iter: int = 200, min_support: int = 60,
+                  max_iter: int = 200, min_support: int = 15,
                   rng: Optional[np.random.Generator] = None
                   ) -> Optional[Tuple[np.ndarray, float, np.ndarray]]:
     rng = rng or np.random.default_rng()

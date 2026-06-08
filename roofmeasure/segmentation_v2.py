@@ -1,17 +1,18 @@
-"""Roof plane segmentation via Open3D.
+"""Roof plane segmentation v3.3 — point-assignment area calc.
 
-Replaces the hand-rolled RANSAC in `roofmeasure/segmentation.py` with Open3D's
-battle-tested point cloud algorithms:
-  - Open3D's `segment_plane()` for RANSAC plane fitting (well-tuned, fast)
-  - `cluster_dbscan()` for separating disconnected facets sharing the same plane
-  - `compute_point_cloud_normals()` for per-point normal estimation
+v3.3 fix: after RANSAC+merge gives N candidate planes, REASSIGN every roof
+point to its closest plane (3D perpendicular distance). Per-facet area is
+then the convex hull (XY) of that facet's UNIQUELY assigned points,
+slope-corrected. No overlap by construction — each point belongs to exactly
+one facet — so the sum of per-facet areas equals the total roof area with
+no double counting and no XY-union "first facet swallows everything"
+pathology that broke v3.2.
 
-Open3D: https://github.com/isl-org/Open3D
-Plane segmentation guide:
-  https://www.open3d.org/docs/release/tutorial/geometry/pointcloud.html#Plane-segmentation
-
-The public surface matches the existing segmentation.py so swapping is a
-one-line import change in measurement.py.
+Lineage:
+  v3   : sum of plane-local convex hulls → 30k sqft (way too high, overlap)
+  v3.1 : + coplanar merge + spurious filter → 17k sqft (still 4.7x high)
+  v3.2 : XY-union diff largest-first → 428 sqft (over-corrected, 1 facet ate the roof)
+  v3.3 : reassign points → take per-facet XY hull → sum         (this version)
 """
 from __future__ import annotations
 
@@ -31,7 +32,6 @@ except ImportError:
 LOG = logging.getLogger(__name__)
 
 
-# Re-export the original dataclasses for drop-in compatibility.
 @dataclass
 class RoofFacet:
     id: int
@@ -64,92 +64,265 @@ class RoofSegmentation:
     notes: List[str] = field(default_factory=list)
 
 
-def _normal_to_pitch_azimuth(normal: np.ndarray) -> Tuple[float, float, float]:
-    """Returns (pitch_deg, pitch_x_in_12, azimuth_deg) from a unit normal with z>=0."""
+def _normal_to_pitch_azimuth(normal):
     nx, ny, nz = normal
     if nz < 0:
         nx, ny, nz = -nx, -ny, -nz
-    # Pitch = angle from horizontal = angle between normal and vertical
     pitch_deg = math.degrees(math.acos(max(-1.0, min(1.0, nz))))
-    # Rise per 12 (US convention): tan(pitch) * 12
     pitch_x_in_12 = math.tan(math.radians(pitch_deg)) * 12
-    # Azimuth = compass direction the slope faces (looking down the slope)
-    # The slope-down vector is (-nx, -ny) in horizontal plane.
-    azimuth_rad = math.atan2(-nx, -ny)  # 0=N, increases clockwise to E
+    azimuth_rad = math.atan2(-nx, -ny)
     azimuth_deg = math.degrees(azimuth_rad) % 360
     return pitch_deg, pitch_x_in_12, azimuth_deg
 
 
-def segment_roof(
-    points: np.ndarray,
-    ground_z_percentile: float = 1.0,
-    min_hag_m: float = 1.0,
-    plane_threshold_m: float = 0.20,
-    plane_min_inliers: int = 20,
-    max_planes: int = 12,
-    cluster_eps_m: float = 1.0,
-    cluster_min_points: int = 20,
-) -> RoofSegmentation:
-    """Segment roof points into facets using Open3D.
+def _adaptive_params(density, points_already_filtered):
+    if density < 5:
+        return 0.35, 25, False, 4.0, 18, 2000
+    elif density < 8:
+        return 0.30, 20, False, 2.5, 15, 1500
+    elif density < 20:
+        return 0.20, 25, "mild", 1.5, 20, 1500
+    else:
+        return 0.15, 30, True, 1.2, 30, 2000
 
-    Args:
-      points: (N, 3) east/north/elev in meters.
-      ground_z_percentile: percentile of Z values to call "ground" (1.0 = 1st percentile).
-      min_hag_m: drop points within this many meters of ground (vegetation, etc.).
-      plane_threshold_m: RANSAC inlier distance — how far a point can be from a
-        candidate plane and still count as supporting it.
-      plane_min_inliers: minimum number of supporting points to accept a plane.
-      max_planes: hard cap on how many planes to extract.
-      cluster_eps_m: DBSCAN epsilon for separating disconnected facets on the same plane.
-      cluster_min_points: DBSCAN minimum points per cluster.
 
-    Returns RoofSegmentation matching the original signature so measurement.py
-    can use either implementation interchangeably.
+def _facet_angle_diff_deg(n1, n2):
+    n1 = np.asarray(n1) / (np.linalg.norm(n1) + 1e-12)
+    n2 = np.asarray(n2) / (np.linalg.norm(n2) + 1e-12)
+    return math.degrees(math.acos(float(np.clip(n1 @ n2, -1.0, 1.0))))
+
+
+def _merge_coplanar_facets(facets, angle_tol_deg=8.0, centroid_xy_dist_m=10.0):
+    n = len(facets)
+    if n <= 1:
+        return facets
+    parent = list(range(n))
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    def union(i, j):
+        pi, pj = find(i), find(j)
+        if pi != pj:
+            parent[pi] = pj
+    for i in range(n):
+        for j in range(i + 1, n):
+            angle = _facet_angle_diff_deg(facets[i].plane_normal, facets[j].plane_normal)
+            if angle > angle_tol_deg:
+                continue
+            ci = np.asarray(facets[i].centroid[:2])
+            cj = np.asarray(facets[j].centroid[:2])
+            if np.linalg.norm(ci - cj) <= centroid_xy_dist_m:
+                union(i, j)
+    groups = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+    merged = []
+    next_id = 0
+    for _, indices in groups.items():
+        if len(indices) == 1:
+            f = facets[indices[0]]
+            f.id = next_id
+            merged.append(f)
+            next_id += 1
+            continue
+        all_inlier_idx = np.unique(np.concatenate([facets[i].inlier_indices for i in indices]))
+        rep_i = max(indices, key=lambda i: len(facets[i].inlier_indices))
+        rep_normal = np.asarray(facets[rep_i].plane_normal)
+        rep_d = facets[rep_i].plane_d
+        pitch_deg, pitch_x12, azimuth_deg = _normal_to_pitch_azimuth(rep_normal)
+        centroids_3d = np.array([facets[i].centroid for i in indices])
+        weights = np.array([len(facets[i].inlier_indices) for i in indices], dtype=float)
+        weights /= weights.sum()
+        combined_centroid = tuple((centroids_3d * weights[:, None]).sum(axis=0).tolist())
+        merged.append(RoofFacet(
+            id=next_id, plane_normal=tuple(rep_normal.tolist()), plane_d=rep_d,
+            inlier_indices=all_inlier_idx, area_m2=0.0,  # recomputed later
+            pitch_deg=pitch_deg, pitch_x_in_12=pitch_x12, azimuth_deg=azimuth_deg,
+            centroid=combined_centroid, outline_xy=None,
+        ))
+        next_id += 1
+    return merged
+
+
+def _reassign_and_compute_areas(facets, roof_points, roof_idx_to_orig, max_dist_m=0.5):
+    """v3.3: point-assignment-based area calc.
+
+    For each roof point, compute distance to each facet's plane and assign
+    the point to its single closest facet (if within `max_dist_m`).
+    Per-facet area = convex hull of its newly-assigned XY positions,
+    slope-corrected by 1/cos(pitch).
+
+    Returns: (new_facets, total_area_m2)
     """
-    if not HAS_OPEN3D:
-        LOG.error("segmentation_v2: open3d not installed")
-        return RoofSegmentation([], [], 0.0, len(points), notes=["open3d not installed"])
+    if not facets or len(roof_points) == 0:
+        return facets, 0.0
+    try:
+        from scipy.spatial import ConvexHull
+    except ImportError:
+        return facets, 0.0
 
-    if len(points) < plane_min_inliers:
+    n_pts = len(roof_points)
+    n_facets = len(facets)
+
+    # Distance matrix: n_pts x n_facets, perpendicular distance to each plane
+    dist = np.full((n_pts, n_facets), np.inf)
+    for j, f in enumerate(facets):
+        nrm = np.array(f.plane_normal)
+        # plane: n . X = plane_d  (n is unit). |n . X - plane_d| is perpendicular distance.
+        dist[:, j] = np.abs(roof_points @ nrm - f.plane_d)
+
+    best_facet = np.argmin(dist, axis=1)
+    best_dist = dist[np.arange(n_pts), best_facet]
+    assigned_mask = best_dist < max_dist_m
+
+    new_facets = []
+    total_area_m2 = 0.0
+    for j, f in enumerate(facets):
+        member_mask = (best_facet == j) & assigned_mask
+        member_idx = np.where(member_mask)[0]  # indices into roof_points
+        if len(member_idx) < 4:
+            continue
+        member_pts = roof_points[member_idx]
+        # Per-facet area = convex hull of assigned points in XY, slope-corrected
+        xy = member_pts[:, :2]
+        try:
+            hull = ConvexHull(xy)
+            xy_hull_area = float(hull.volume)  # 2D area
+        except Exception:
+            # Fallback to bbox
+            mn, mx = xy.min(axis=0), xy.max(axis=0)
+            xy_hull_area = float((mx[0] - mn[0]) * (mx[1] - mn[1]))
+        slope = max(math.cos(math.radians(f.pitch_deg)), 0.05)
+        area_m2 = xy_hull_area / slope
+        f.area_m2 = area_m2
+        f.inlier_indices = roof_idx_to_orig[member_idx]
+        f.centroid = tuple(member_pts.mean(axis=0).tolist())
+        try:
+            f.outline_xy = xy[hull.vertices]
+        except Exception:
+            f.outline_xy = None
+        total_area_m2 += area_m2
+        new_facets.append(f)
+
+    new_facets.sort(key=lambda f: -f.area_m2)
+    for i, f in enumerate(new_facets):
+        f.id = i
+    return new_facets, total_area_m2
+
+
+def _filter_spurious_facets(facets, min_pitch_deg=5.0, max_area_m2=600.0,
+                            min_area_m2=2.0):
+    """v3.3: relaxed max (was 400) since point-assignment naturally bounds it,
+    plus added min_area to drop tiny noise facets (<2m^2 = <21 sqft)."""
+    kept, dropped = [], []
+    for f in facets:
+        if f.pitch_deg < min_pitch_deg:
+            dropped.append(f"#{f.id} flat (pitch={f.pitch_deg:.1f}deg)")
+            continue
+        if f.area_m2 > max_area_m2:
+            dropped.append(f"#{f.id} oversize ({f.area_m2:.0f}m^2)")
+            continue
+        if f.area_m2 < min_area_m2:
+            dropped.append(f"#{f.id} tiny ({f.area_m2:.1f}m^2)")
+            continue
+        kept.append(f)
+    for new_id, f in enumerate(kept):
+        f.id = new_id
+    return kept, dropped
+
+
+def estimate_density(points):
+    if len(points) < 4:
+        return 0.0
+    ex = float(np.percentile(points[:, 0], 99) - np.percentile(points[:, 0], 1))
+    ey = float(np.percentile(points[:, 1], 99) - np.percentile(points[:, 1], 1))
+    return len(points) / max(1.0, ex * ey)
+
+
+def segment_roof(
+    points, *,
+    density_hint=None, points_already_filtered=False,
+    ground_z_percentile=1.0, min_hag_m=1.0, max_planes=16, verbose=False,
+    plane_threshold_m=None, plane_min_inliers=None, use_outlier_filter=None,
+    cluster_eps_m=None, cluster_min_points=None,
+    footprint_area_m2=None,
+    footprint_vertex_count=None,
+):
+    if not HAS_OPEN3D:
+        return RoofSegmentation([], [], 0.0, len(points), notes=["open3d not installed"])
+    if len(points) < 15:
         return RoofSegmentation([], [], 0.0, len(points), notes=["too few input points"])
 
-    # === 1. Build Open3D point cloud + ground filter ===
+    density = density_hint if density_hint else estimate_density(points)
+    LOG.info("seg_v3_3: density=%.1f pts/m^2", density)
+
+    auto_thr, auto_min, auto_out, auto_eps, auto_clu_min, auto_iter = _adaptive_params(
+        density, points_already_filtered)
+    if plane_threshold_m is None: plane_threshold_m = auto_thr
+    if plane_min_inliers is None: plane_min_inliers = auto_min
+    if use_outlier_filter is None: use_outlier_filter = auto_out and not points_already_filtered
+    if cluster_eps_m is None: cluster_eps_m = auto_eps
+    if cluster_min_points is None: cluster_min_points = auto_clu_min
+
+    LOG.info("seg_v3_3: thr=%.2fm min=%d out=%s eps=%.2fm clu=%d iter=%d",
+             plane_threshold_m, plane_min_inliers, use_outlier_filter,
+             cluster_eps_m, cluster_min_points, auto_iter)
+
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points)
+    current_to_orig = np.arange(len(points))
 
-    z = points[:, 2]
-    ground_z = float(np.percentile(z, ground_z_percentile))
-    roof_mask = z > (ground_z + min_hag_m)
-    pcd_roof = pcd.select_by_index(np.where(roof_mask)[0].tolist())
+    if use_outlier_filter and len(points) > 200:
+        try:
+            if use_outlier_filter == "mild":
+                pcd_clean, kept_local = pcd.remove_statistical_outlier(nb_neighbors=8, std_ratio=3.0)
+            else:
+                pcd_clean, kept_local = pcd.remove_statistical_outlier(nb_neighbors=15, std_ratio=2.0)
+            LOG.info("seg_v3_3: outlier %d -> %d", len(pcd.points), len(pcd_clean.points))
+            pcd = pcd_clean
+            current_to_orig = current_to_orig[np.asarray(kept_local)]
+        except Exception as e:
+            LOG.warning("seg_v3_3: outlier removal failed: %s", e)
+
+    pts_np = np.asarray(pcd.points)
+    if points_already_filtered:
+        ground_z = float(np.percentile(pts_np[:, 2], 0)) if len(pts_np) else 0.0
+        pcd_roof = pcd
+        roof_to_orig = current_to_orig
+    else:
+        z = pts_np[:, 2]
+        ground_z = float(np.percentile(z, ground_z_percentile))
+        roof_mask = z > (ground_z + min_hag_m)
+        keep_local = np.where(roof_mask)[0]
+        pcd_roof = pcd.select_by_index(keep_local.tolist())
+        roof_to_orig = current_to_orig[keep_local]
+        LOG.info("seg_v3_3: ground filter ground_z=%.2f kept %d/%d",
+                 ground_z, len(pcd_roof.points), len(pcd.points))
 
     if len(pcd_roof.points) < plane_min_inliers:
         return RoofSegmentation([], [], ground_z, len(points),
-                                notes=["no points above ground threshold"])
+                                notes=[f"only {len(pcd_roof.points)} pts"])
 
-    LOG.info(
-        "segmentation_v2: %d total pts, %d after ground filter (ground_z=%.2fm, min_hag=%.1fm)",
-        len(points), len(pcd_roof.points), ground_z, min_hag_m,
-    )
+    # Keep a copy of the roof point cloud (for v3.3 reassignment)
+    roof_points_np = np.asarray(pcd_roof.points)
 
-    # === 2. Iteratively extract planes via RANSAC ===
     remaining = pcd_roof
-    facets: List[RoofFacet] = []
+    remaining_to_orig = roof_to_orig.copy()
+    facets = []
     facet_id = 0
+    rejection_log = []
+    plane_idx = 0
 
     for plane_idx in range(max_planes):
         if len(remaining.points) < plane_min_inliers:
             break
-
-        # Open3D's segment_plane returns (plane_model, inlier_indices).
-        # plane_model is [a, b, c, d] for plane ax + by + cz + d = 0.
         try:
             plane_model, inlier_indices = remaining.segment_plane(
-                distance_threshold=plane_threshold_m,
-                ransac_n=3,
-                num_iterations=500,
-            )
+                distance_threshold=plane_threshold_m, ransac_n=3, num_iterations=auto_iter)
         except Exception as e:
-            LOG.warning("segmentation_v2: segment_plane failed at iter %d: %s", plane_idx, e)
+            rejection_log.append(f"iter{plane_idx}:{e}")
             break
 
         if len(inlier_indices) < plane_min_inliers:
@@ -158,30 +331,36 @@ def segment_roof(
         a, b, c, d = plane_model
         normal = np.array([a, b, c], dtype=np.float64)
         norm_len = np.linalg.norm(normal)
-        if norm_len == 0:
-            break
+        if norm_len == 0 or not np.isfinite(norm_len):
+            keep_mask = np.ones(len(remaining_to_orig), dtype=bool)
+            keep_mask[np.asarray(inlier_indices)] = False
+            remaining = remaining.select_by_index(inlier_indices, invert=True)
+            remaining_to_orig = remaining_to_orig[keep_mask]
+            continue
         normal /= norm_len
         if normal[2] < 0:
             normal = -normal
-        # Plane: normal . X = d  (Open3D returns ax+by+cz+d=0, so n.X = -d/norm_len)
         plane_d = -d / norm_len
 
-        # Filter out near-vertical planes (walls, not roof)
         if normal[2] < 0.15:
-            # Skip this plane but remove its points so we don't keep finding it
+            keep_mask = np.ones(len(remaining_to_orig), dtype=bool)
+            keep_mask[np.asarray(inlier_indices)] = False
             remaining = remaining.select_by_index(inlier_indices, invert=True)
+            remaining_to_orig = remaining_to_orig[keep_mask]
             continue
 
         inlier_points = np.asarray(remaining.points)[inlier_indices]
-
-        # === 2b. DBSCAN cluster the inliers to separate disjoint facets on same plane ===
-        # Useful for e.g. two south-facing gables that share a normal.
-        # We do this in plane-local 2D after projecting to the plane.
         inlier_pcd = remaining.select_by_index(inlier_indices)
-        labels = np.array(inlier_pcd.cluster_dbscan(
-            eps=cluster_eps_m, min_points=cluster_min_points, print_progress=False
-        ))
-        unique_labels = [l for l in np.unique(labels) if l >= 0]  # -1 = noise
+        try:
+            labels = np.array(inlier_pcd.cluster_dbscan(
+                eps=cluster_eps_m, min_points=cluster_min_points, print_progress=False))
+        except Exception:
+            labels = np.zeros(len(inlier_indices), dtype=int)
+
+        unique_labels = [l for l in np.unique(labels) if l >= 0]
+        if not unique_labels:
+            unique_labels = [0]
+            labels = np.zeros(len(inlier_indices), dtype=int)
 
         for cluster_label in unique_labels:
             cluster_mask = labels == cluster_label
@@ -190,65 +369,72 @@ def segment_roof(
                 continue
 
             pitch_deg, pitch_x12, azimuth_deg = _normal_to_pitch_azimuth(normal)
-
-            # Project cluster points to plane-local 2D for area + outline
-            # Build orthonormal basis (u, v) in the plane.
-            arbitrary = np.array([1.0, 0.0, 0.0]) if abs(normal[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
-            u = np.cross(normal, arbitrary)
-            u /= np.linalg.norm(u)
-            v = np.cross(normal, u)
-            local_xy = np.column_stack([cluster_points @ u, cluster_points @ v])
-            # Area via convex hull (close enough for roof facets)
-            try:
-                from scipy.spatial import ConvexHull
-                hull = ConvexHull(local_xy)
-                area_m2 = float(hull.volume)  # In 2D, .volume is the area
-                outline_xy = local_xy[hull.vertices]
-            except Exception:
-                # Fallback: bbox area
-                bbox_min = local_xy.min(axis=0)
-                bbox_max = local_xy.max(axis=0)
-                area_m2 = float((bbox_max[0] - bbox_min[0]) * (bbox_max[1] - bbox_min[1]))
-                outline_xy = None
-
-            # Slope-correct: area in plane = horizontal area / cos(pitch)
-            # cluster_points are already 3D so the hull area is the slope-corrected area.
-
             centroid = tuple(cluster_points.mean(axis=0).tolist())
+            cluster_inlier_orig = remaining_to_orig[np.array(inlier_indices)[cluster_mask]]
 
             facets.append(RoofFacet(
-                id=facet_id,
-                plane_normal=tuple(normal.tolist()),
-                plane_d=plane_d,
-                inlier_indices=np.array(inlier_indices)[cluster_mask],
-                area_m2=area_m2,
-                pitch_deg=pitch_deg,
-                pitch_x_in_12=pitch_x12,
-                azimuth_deg=azimuth_deg,
-                centroid=centroid,
-                outline_xy=outline_xy,
+                id=facet_id, plane_normal=tuple(normal.tolist()), plane_d=plane_d,
+                inlier_indices=cluster_inlier_orig, area_m2=0.0,  # placeholder
+                pitch_deg=pitch_deg, pitch_x_in_12=pitch_x12, azimuth_deg=azimuth_deg,
+                centroid=centroid, outline_xy=None,
             ))
             facet_id += 1
 
-        # Remove these inliers and continue searching for the next plane
+        keep_mask = np.ones(len(remaining_to_orig), dtype=bool)
+        keep_mask[np.asarray(inlier_indices)] = False
         remaining = remaining.select_by_index(inlier_indices, invert=True)
+        remaining_to_orig = remaining_to_orig[keep_mask]
 
-    LOG.info("segmentation_v2: extracted %d facets", len(facets))
+    LOG.info("seg_v3_3: %d raw facets after %d iters", len(facets), plane_idx + 1)
 
-    # === 3. Edge classification (placeholder — same as old engine for now) ===
-    # The old segmentation.classify_edges does ridge/hip/valley/eave. That's a
-    # reasonable amount of code to port over. For phase 1 we just return facets
-    # and let the existing derive-line-measurements path estimate edges from
-    # facet count + area + pitch. We'll port full edge classification in phase 2.
-    edges: List[RoofEdge] = []
+    # v3.1 coplanar merge
+    pre_merge = len(facets)
+    facets = _merge_coplanar_facets(facets, angle_tol_deg=8.0, centroid_xy_dist_m=10.0)
+    LOG.info("seg_v3_3: merge %d -> %d", pre_merge, len(facets))
+
+    # v3.3 point reassignment + area recompute
+    facets, total_area_m2 = _reassign_and_compute_areas(
+        facets, roof_points_np, roof_to_orig, max_dist_m=0.5,
+    )
+    LOG.info("seg_v3_3: reassign -> %d facets, total_area=%.1fm^2 (%.0fsqft)",
+             len(facets), total_area_m2, total_area_m2 * 10.7639)
+
+    facets, dropped = _filter_spurious_facets(
+        facets, min_pitch_deg=5.0, max_area_m2=600.0, min_area_m2=2.0,
+    )
+    if dropped:
+        LOG.info("seg_v3_3: dropped %d: %s", len(dropped), "; ".join(dropped[:5]))
+
+    notes = [
+        f"v3.3 reassign density={density:.1f}/m^2 thr={plane_threshold_m}m min={plane_min_inliers}",
+        f"merge {pre_merge}->{len(facets)+len(dropped)}, drop {len(dropped)}, final {len(facets)}",
+        f"total_area={total_area_m2:.1f}m^2 ({total_area_m2*10.7639:.0f}sqft)",
+    ]
+    if dropped:
+        notes.append("dropped: " + "; ".join(dropped[:3]))
+
+
+    # v3.4: footprint-area override (OSM polygon is ground truth for XY area)
+    if footprint_area_m2 and footprint_area_m2 > 5 and facets:
+        import math as _math
+        total_inliers = sum(len(f.inlier_indices) for f in facets)
+        if total_inliers > 0:
+            weighted_cos = sum(_math.cos(_math.radians(f.pitch_deg)) * len(f.inlier_indices) for f in facets) / total_inliers
+            weighted_cos = max(weighted_cos, 0.1)
+            v = footprint_vertex_count or 8
+            if v <= 5: OVERHANG_FACTOR = 1.40
+            elif v <= 7: OVERHANG_FACTOR = 1.25
+            elif v <= 12: OVERHANG_FACTOR = 1.15
+            else: OVERHANG_FACTOR = 1.10
+            LOG.info('seg_v3_5: overhang=%.2f for %d-vert', OVERHANG_FACTOR, v)
+            total_surface_m2 = footprint_area_m2 * OVERHANG_FACTOR / weighted_cos
+            for f in facets:
+                share = len(f.inlier_indices) / total_inliers
+                f.area_m2 = total_surface_m2 * share
+            LOG.info("seg_v3_5: footprint override fp=%.1fm^2 -> total_surface=%.1fm^2 (%.0fsqft)",
+                     footprint_area_m2, total_surface_m2, total_surface_m2 * 10.7639)
 
     return RoofSegmentation(
-        facets=facets,
-        edges=edges,
-        ground_z=ground_z,
-        point_count=len(points),
-        notes=[
-            f"open3d segment_plane + cluster_dbscan, threshold={plane_threshold_m}m, "
-            f"min_inliers={plane_min_inliers}, max_planes={max_planes}",
-        ],
+        facets=facets, edges=[], ground_z=ground_z,
+        point_count=len(points), notes=notes,
     )

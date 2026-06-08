@@ -1,0 +1,101 @@
+---
+description: roofmeasure-engine — Cursor rules
+globs: ["**/*.py", "**/*.sh", "**/*.yml", "**/*.yaml"]
+alwaysApply: true
+---
+
+# `roofmeasure-engine` — Cursor Rules
+
+You are working in **`roofmeasure-engine`**, the Python backend of the
+RoofMeasure product. The companion repo `roofmeasure-portal` (Next.js)
+calls this engine over HTTPS with an API key.
+
+## Before you change anything
+
+1. Read `AGENTS.md`, `PROJECT_BRIEF.md`, `ARCHITECTURE.md`, and `ROADMAP.md`.
+2. Check `docs/DECISIONS.md` — don't re-litigate decisions already made.
+3. Check `docs/OPEN_QUESTIONS.md` — your question may already be logged.
+4. If you're about to edit `roofmeasure/segmentation_v2.py`, stop and
+   ask first. It's tuned against ground truth and easy to regress.
+
+## Working principles
+
+- **One step at a time.** The founder prefers small probes over big
+  multi-step patches. When debugging, give the smallest possible probe
+  command. Wait for output. Decide the next move.
+- **Ground-truth-driven.** When in doubt, run the harness:
+  `python tests/ground_truth_harness.py tests/ground_truth.csv`.
+  The auto-test watcher on the VPS does this for you on every `.py` edit.
+- **Marker comments for in-place patches.** Use a unique marker like
+  `# OSM_SANITY_V312_INLINE` so the deploy script can detect what's
+  already applied. Re-running `MASTER_DEPLOY.sh` must be safe.
+
+## Engine-specific rules
+
+- Each external provider gets its own module
+  (`nrcan_hrdem_provider.py`, `ms_global_ml.py`, etc.) and is wired into
+  the chain in `footprint_v2.get_building_footprint` or
+  `hybrid_pipeline.measure_hybrid` — not anywhere else.
+- Use `logging.getLogger("roofmeasure.<module>")`. Never `print()`.
+- Type hints required on all public functions.
+- Black formatting, line length 100.
+- The engine is stateless from a customer perspective. No tenant/customer
+  IDs in the API. The portal owns identity.
+
+## API contract with `roofmeasure-portal`
+
+The portal sends `POST /v1/measure { lat, lon, address?, strategy?,
+force_refresh? }` with an `X-API-Key` header. The full request/response
+schema is in `AGENTS.md` section 5. If you change the response shape
+you MUST update:
+- `AGENTS.md` section 5
+- `ARCHITECTURE.md` "Request flow"
+- The portal's `lib/engine-client.ts` types
+
+## Quality bar before declaring done
+
+- All 11 ground-truth addresses still run (succeed or fail — no new
+  uncaught exceptions).
+- Mean area error across succeeded addresses must not regress more than
+  2 percentage points from the ~4.3% baseline.
+- `mypy roofmeasure/` passes with no new errors.
+- `pytest tests/unit/` passes.
+
+## Secrets / safety
+
+- Never commit a real Google API key, ENGINE_API_KEY, or VPS credential.
+- The Google API key has been rotated once already after a chat-history
+  leak. If you see `AIzaSy...` in old logs or chat history, it's dead —
+  don't paste it back.
+- All real values live in `/home/roofmeasure/engine/.env` on the VPS
+  (mode 600, owned by `roofmeasure`).
+
+## Do not touch (high-blast-radius files)
+
+- `roofmeasure/segmentation_v2.py` — algorithm tuned against ground truth.
+  Mean error 4.3%. Edits require harness before+after runs.
+- `tests/ground_truth.csv` — adding rows via
+  `scripts/add_eagleview_pdf.sh` is fine; never edit existing rows.
+- VPS nginx config, TLS certs, systemd units — change only with explicit
+  user request and a documented rollback plan.
+
+## Communication style
+
+- Acknowledge the issue, fix it, move on. Don't apologize.
+- When you're not sure between two approaches, give the founder a clear
+  binary choice rather than picking yourself.
+- When the founder pastes an error, diagnose first — give the smallest
+  possible probe. Don't rewrite the world.
+
+## Open priorities (highest leverage first — see ROADMAP.md)
+
+1. Smart polygon picker (fixes Joyceville, Frontenac).
+2. Defensive geocode validation in the engine.
+3. MS Global ML parquet predicate pushdown (cuts bandwidth 100×).
+4. Engine systemd hang fix (signal.alarm timeouts).
+5. Confidence score in response JSON.
+6. Rotate Google API key + LIDAR worker keys.
+7. Address geocoding cache.
+8. Expand ground truth from 11 → 50 addresses.
+9. Per-tenant API key scoping.
+10. Background pre-warm of MS Global ML parquets.

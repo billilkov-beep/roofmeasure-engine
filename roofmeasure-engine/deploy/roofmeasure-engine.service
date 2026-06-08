@@ -1,0 +1,52 @@
+# /etc/systemd/system/roofmeasure-engine.service
+#
+# Runs the Python engine as an unprivileged user with auto-restart and journald logging.
+#
+# Install:
+#   sudo useradd -r -s /usr/sbin/nologin roofmeasure
+#   sudo cp -r /path/to/roofmeasure_engine /opt/roofmeasure
+#   sudo chown -R roofmeasure:roofmeasure /opt/roofmeasure
+#   sudo cp deploy/roofmeasure-engine.service /etc/systemd/system/
+#   sudo cp deploy/roofmeasure-engine.env /etc/roofmeasure-engine.env
+#   sudo chmod 600 /etc/roofmeasure-engine.env
+#   sudo chown root:roofmeasure /etc/roofmeasure-engine.env
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now roofmeasure-engine
+#   sudo journalctl -u roofmeasure-engine -f
+
+[Unit]
+Description=RoofMeasure LiDAR + Solar API engine
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=roofmeasure
+Group=roofmeasure
+WorkingDirectory=/opt/roofmeasure
+EnvironmentFile=/etc/roofmeasure-engine.env
+ExecStart=/usr/bin/python3 /opt/roofmeasure/measure.py --serve 8088
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=roofmeasure-engine
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/cache/roofmeasure /opt/roofmeasure/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+
+# Performance
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

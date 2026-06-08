@@ -1,0 +1,12 @@
+# Minimal dependencies for the roofmeasure engine prototype.
+# The geometry pipeline uses only numpy; the rest of the deps are for
+# data fetching, LAZ parsing, and CRS handling.
+
+numpy>=1.24
+requests>=2.30
+
+# Optional but recommended:
+laspy>=2.4         # LAZ/LAS point cloud reading (USGS 3DEP, OpenTopography)
+pyproj>=3.6        # CRS transforms for state-plane / UTM LAZ tiles
+shapely>=2.0       # Faster geometry ops (currently we use pure-numpy fallbacks)
+pillow>=10.0       # Aerial imagery handling (for the SAM2 fallback path)

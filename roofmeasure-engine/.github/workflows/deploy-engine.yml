@@ -1,0 +1,113 @@
+# Deploy the RoofMeasure engine to a single VPS via SSH + rsync + systemctl.
+#
+# Required GitHub Secrets (Settings -> Secrets and variables -> Actions):
+#   DEPLOY_HOST          - e.g. lidar-worker.canadasroofer.com
+#   DEPLOY_USER          - SSH user with sudo for systemctl (e.g. deploy)
+#   DEPLOY_SSH_KEY       - private key contents (ed25519 or rsa); generate with:
+#                          ssh-keygen -t ed25519 -f deploy_key -N ''
+#                          paste deploy_key into the secret; add deploy_key.pub
+#                          to /home/<user>/.ssh/authorized_keys on the VPS
+#   DEPLOY_KNOWN_HOSTS   - output of: ssh-keyscan -H lidar-worker.canadasroofer.com
+#   ENGINE_API_KEY       - the X-API-Key value (same as /etc/roofmeasure-engine.env)
+#                          used only for the post-deploy smoke test
+#
+# The deploy user needs passwordless sudo for two specific commands. Add to
+# /etc/sudoers.d/deploy-engine on the VPS:
+#   deploy ALL=(root) NOPASSWD: /bin/systemctl restart roofmeasure-engine
+#   deploy ALL=(root) NOPASSWD: /bin/systemctl status roofmeasure-engine
+
+name: Deploy LiDAR engine
+on:
+  workflow_dispatch:                # manual trigger from the Actions tab
+  push:
+    branches: [main]
+    paths:
+      - 'roofmeasure/**'
+      - 'measure.py'
+      - 'requirements.txt'
+      - 'deploy/**'
+      - '.github/workflows/deploy-engine.yml'
+
+concurrency:
+  group: deploy-lidar-engine
+  cancel-in-progress: false         # don't cancel a running deploy
+
+jobs:
+  smoke-test:
+    name: Offline smoke tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install numpy requests
+      - name: Run offline tests
+        run: |
+          python3 tests/test_segmentation.py
+          python3 tests/test_google_solar.py
+          python3 examples/demo_offline.py
+
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    needs: smoke-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Sync engine files to VPS
+        run: |
+          rsync -avz --delete \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='examples/demo_offline_output.json' \
+            ./ ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/roofmeasure/
+
+      - name: Restart engine service
+        run: |
+          ssh ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
+            "sudo /bin/systemctl restart roofmeasure-engine && \
+             sleep 3 && \
+             sudo /bin/systemctl status roofmeasure-engine --no-pager | head -20"
+
+      - name: Smoke-test /health and /measure
+        run: |
+          # /health should be 200 without auth
+          curl -fsS https://${{ secrets.DEPLOY_HOST }}/health
+          echo
+
+          # /measure with the API key should succeed (uses --synthetic so it
+          # doesn't depend on USGS / Solar API uptime for the deploy check)
+          curl -fsS -X POST https://${{ secrets.DEPLOY_HOST }}/measure \
+            -H "Content-Type: application/json" \
+            -H "X-API-Key: ${{ secrets.ENGINE_API_KEY }}" \
+            -d '{"address":"624 Merrill Ave, Bedford, OH","synthetic":true}' \
+            | python3 -c "import sys, json; d = json.load(sys.stdin); \
+                          print('roofAreaSqFt:', d['roofAreaSqFt']); \
+                          print('facetCount:', d['facetCount']); \
+                          assert d['roofAreaSqFt'] > 0, 'zero area'; \
+                          assert d['facetCount'] >= 1, 'no facets'; \
+                          print('smoke test OK')"
+
+      - name: Notify Slack on failure
+        if: failure()
+        run: |
+          # Optional - set SLACK_WEBHOOK_URL secret to enable
+          if [ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]; then
+            curl -fsS -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+              -H 'Content-Type: application/json' \
+              -d '{"text":":x: LiDAR engine deploy failed on ${{ github.sha }}. See https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"}'
+          fi

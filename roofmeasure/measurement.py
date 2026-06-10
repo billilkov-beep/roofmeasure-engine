@@ -14,7 +14,7 @@ import json
 import logging
 import math
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import fields as dataclass_fields, asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 import numpy as np
 
@@ -79,9 +79,30 @@ class RoofMeasurement:
     obstructionSummary: Dict[str, int] = field(default_factory=dict)
     imagery: Dict[str, Any] = field(default_factory=dict)
 
+
+    # Real roof/vector geometry for EagleView-style diagrams
+    diagramGeometry: dict | None = None
+    diagramGeometryStatus: str | None = None
+    requiresReview: bool = False
+    edges: list | None = None
+    structureBreakdown: list | None = None
+
     def to_json(self):
         return json.dumps(asdict(self), indent=2, default=str)
 
+
+
+
+def _coerce_roof_measurement(data: dict):
+    allowed = {f.name for f in dataclass_fields(RoofMeasurement)}
+    clean = {k: v for k, v in data.items() if k in allowed}
+    return RoofMeasurement(**clean)
+
+
+def _make_roof_measurement_safe(data: Dict[str, Any]) -> RoofMeasurement:
+    allowed = {f.name for f in dataclass_fields(RoofMeasurement)}
+    clean = {k: v for k, v in data.items() if k in allowed}
+    return RoofMeasurement(**clean)
 
 def measure_roof(address, *, price_low_per_sqft_cents=450, price_high_per_sqft_cents=850,
                  minimum_project_cents=250000, default_waste_pct=12.0,
@@ -160,14 +181,29 @@ def _measure_via_lidar(gc, address, use_synthetic, price_low, price_high, min_ce
 def _measure_via_solar(gc, address, price_low, price_high, min_cents, waste_pct):
     from .providers.google_solar import measure_via_solar_api
     LOG.info("calling Google Solar API for (%.6f, %.6f)", gc.lat, gc.lon)
-    data = measure_via_solar_api(
-        address, gc.lat, gc.lon,
-        required_quality=os.environ.get("GOOGLE_SOLAR_REQUIRED_QUALITY", "HIGH"),
-        price_low_per_sqft_cents=price_low,
-        price_high_per_sqft_cents=price_high,
-        minimum_project_cents=min_cents,
-        default_waste_pct=waste_pct,
-    )
+    last_error = None
+    data = None
+
+    # Real production fallback: try Solar API at HIGH, then MEDIUM, then LOW.
+    # Some USA addresses fail at HIGH even when Google has usable lower-quality data.
+    for quality in ("HIGH", "MEDIUM", "LOW"):
+        try:
+            data = measure_via_solar_api(
+                address, gc.lat, gc.lon,
+                required_quality=quality,
+                price_low_per_sqft_cents=price_low,
+                price_high_per_sqft_cents=price_high,
+                minimum_project_cents=min_cents,
+                default_waste_pct=waste_pct,
+            )
+            data.setdefault("measurementNotes", []).append(f"Google Solar quality fallback used: {quality}")
+            break
+        except Exception as exc:
+            last_error = exc
+            LOG.warning("Google Solar failed at quality=%s: %s", quality, exc)
+
+    if data is None:
+        raise RuntimeError(f"Google Solar failed at HIGH/MEDIUM/LOW: {last_error}")
     data["dataSources"]["geocoder"] = gc.source
     # Attach imagery fetched the same way as LiDAR path
     from .imagery import fetch_property_imagery
@@ -182,7 +218,7 @@ def _measure_via_solar(gc, address, price_low, price_high, min_cents, waste_pct)
         "aerialZoom": imagery.aerial_zoom,
         "note": imagery.note,
     }
-    return RoofMeasurement(**data)
+    return _coerce_roof_measurement(data)
 
 
 def _build_measurement(gc, fp, fp_area_m2, crop, seg, obs,

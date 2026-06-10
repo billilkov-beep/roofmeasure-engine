@@ -23,3 +23,17 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# VPS patch backup files - do not push
+*.bak*
+*.swp
+.env
+.env.*
+venv/
+__pycache__/
+*.pyc
+*.log
+*.db
+cache/
+data/
+tmp/

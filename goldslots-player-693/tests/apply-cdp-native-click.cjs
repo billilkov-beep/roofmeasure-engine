@@ -22,9 +22,10 @@ try {
   ]);
   console.log(\`[native-click] ${'${label}'} at ${'${x.toFixed(1)}'},${'${y.toFixed(1)}'}\`);
   await bounded(input.send('Input.dispatchMouseEvent', { type:'mouseMoved', x, y, button:'none', buttons:0 }), 'move');
-  await bounded(input.send('Input.dispatchMouseEvent', { type:'mousePressed', x, y, button:'left', buttons:1, clickCount:1 }), 'press');
+  input.send('Input.dispatchMouseEvent', { type:'mousePressed', x, y, button:'left', buttons:1, clickCount:1 }).catch(() => {});
+  await page.waitForTimeout(60);
   input.send('Input.dispatchMouseEvent', { type:'mouseReleased', x, y, button:'left', buttons:0, clickCount:1 }).catch(() => {});
-  await page.waitForTimeout(180);
+  await page.waitForTimeout(240);
 }`;
 
   if (!source.includes('Input.dispatchMouseEvent')) {
@@ -37,19 +38,24 @@ try {
     if (!cdpPattern.test(source)) throw new Error('Active CDP session assignment target was not found.');
     source = source.replace(cdpPattern, "const cdp = await page.context().newCDPSession(page);\n    page.__gsCdp = cdp;");
   }
+  if (!source.includes('win.webContents.focus();')) {
+    const focusPattern = /win\.center\(\);/;
+    if (!focusPattern.test(source)) throw new Error('BrowserWindow focus patch target was not found.');
+    source = source.replace(focusPattern, "win.center();\n    win.focus();\n    win.webContents.focus();");
+  }
   fs.writeFileSync(target, source);
 
   const check = spawnSync(process.execPath, ['--check', target], { encoding:'utf8' });
   const diagnostic = [
-    'Reusable CDP native-click patch applied.',
-    'Release events are sent without waiting for renderer rerender acknowledgement.',
+    'Focused physical-pointer bridge test patch applied.',
+    'Mouse press and release are sent without waiting for a rerender acknowledgement.',
     `syntax_status=${check.status}`,
     check.stdout || '',
     check.stderr || ''
   ].join('\n');
   fs.writeFileSync(path.join(proofDir, 'NATIVE-CLICK-PATCH.txt'), diagnostic);
   if (check.status !== 0) throw new Error(`Patched Windows test failed syntax validation: ${check.stderr || check.stdout}`);
-  console.log('Applied reusable bounded CDP native-click test helper.');
+  console.log('Applied focused physical-pointer bridge test helper.');
 } catch (error) {
   fs.writeFileSync(path.join(proofDir, 'NATIVE-CLICK-PATCH-ERROR.txt'), String(error.stack || error));
   throw error;

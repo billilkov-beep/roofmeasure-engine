@@ -1,20 +1,14 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const target = path.join(__dirname, 'windows-dom.e2e.cjs');
-let source = fs.readFileSync(target, 'utf8');
-const before = `async function nativeClick(page, locator, label) {
-  await locator.waitFor({ state:'visible', timeout:10000 });
-  const box = await locator.boundingBox();
-  assert.ok(box && box.width > 2 && box.height > 2, \`${'${label}'} must have a native clickable area.\`);
-  const x = box.x + box.width / 2;
-  const y = box.y + box.height / 2;
-  await page.mouse.move(x, y);
-  await page.mouse.down();
-  await page.mouse.up();
-  await page.waitForTimeout(90);
-}`;
-const after = `async function nativeClick(page, locator, label) {
+const proofDir = path.resolve(__dirname, '..', 'visual-proof', process.env.GS_TEST_LABEL || 'unknown');
+fs.mkdirSync(proofDir, { recursive:true });
+
+try {
+  let source = fs.readFileSync(target, 'utf8');
+  const after = `async function nativeClick(page, locator, label) {
   await locator.waitFor({ state:'visible', timeout:10000 });
   const box = await locator.boundingBox();
   assert.ok(box && box.width > 2 && box.height > 2, \`${'${label}'} must have a native clickable area.\`);
@@ -36,12 +30,24 @@ const after = `async function nativeClick(page, locator, label) {
   await page.waitForTimeout(100);
 }`;
 
-if (source.includes(before)) {
-  source = source.replace(before, after);
-  fs.writeFileSync(target, source);
-  console.log('Applied bounded CDP native-click test helper.');
-} else if (source.includes("Input.dispatchMouseEvent")) {
-  console.log('Bounded CDP native-click test helper is already applied.');
-} else {
-  throw new Error('Native-click helper patch target was not found.');
+  if (!source.includes('Input.dispatchMouseEvent')) {
+    const pattern = /async function nativeClick\(page, locator, label\) \{[\s\S]*?await page\.waitForTimeout\(90\);\r?\n\}/;
+    if (!pattern.test(source)) throw new Error('Native-click helper patch target was not found.');
+    source = source.replace(pattern, after);
+    fs.writeFileSync(target, source);
+  }
+
+  const check = spawnSync(process.execPath, ['--check', target], { encoding:'utf8' });
+  const diagnostic = [
+    'CDP native-click patch applied.',
+    `syntax_status=${check.status}`,
+    check.stdout || '',
+    check.stderr || ''
+  ].join('\n');
+  fs.writeFileSync(path.join(proofDir, 'NATIVE-CLICK-PATCH.txt'), diagnostic);
+  if (check.status !== 0) throw new Error(`Patched Windows test failed syntax validation: ${check.stderr || check.stdout}`);
+  console.log('Applied CRLF-safe bounded CDP native-click test helper.');
+} catch (error) {
+  fs.writeFileSync(path.join(proofDir, 'NATIVE-CLICK-PATCH-ERROR.txt'), String(error.stack || error));
+  throw error;
 }

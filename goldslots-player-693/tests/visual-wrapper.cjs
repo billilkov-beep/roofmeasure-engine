@@ -8,6 +8,14 @@ const proofDir = path.resolve(__dirname, '..', 'visual-proof', process.env.GS_TE
 fs.mkdirSync(proofDir, { recursive: true });
 
 let source = fs.readFileSync(sourcePath, 'utf8');
+source = source.replace(
+  "    await page.waitForSelector('.game-grid',{state:'attached',timeout:30000});",
+  `    await page.waitForTimeout(2000);
+    fs.writeFileSync(path.join(SHOTS,'BEFORE-LOBBY.html'),await page.content());
+    fs.writeFileSync(path.join(SHOTS,'BEFORE-LOBBY-ERRORS.json'),JSON.stringify(pageErrors,null,2));
+    await page.screenshot({path:path.join(SHOTS,'before-lobby.png')});
+    await page.waitForSelector('.game-grid',{state:'attached',timeout:10000});`
+);
 source = source.replace('})().catch((error)=>{', '})().then(()=>process.exit(0)).catch((error)=>{');
 source = source.replace('})().catch((error) => {', '})().then(()=>process.exit(0)).catch((error) => {');
 fs.writeFileSync(generatedPath, source);

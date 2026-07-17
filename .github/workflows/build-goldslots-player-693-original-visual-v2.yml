@@ -1,0 +1,159 @@
+name: Build Gold Slots Player 6.9.3 Original Visual V2
+
+on:
+  push:
+    branches: [release/goldslots-player-6.9.3-original-visual]
+    paths:
+      - 'goldslots-player-693/**'
+      - '.github/workflows/build-goldslots-player-693-original-visual-v2.yml'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'goldslots-player-693/**'
+      - '.github/workflows/build-goldslots-player-693-original-visual-v2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  original-visual-windows-release:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: goldslots-player-693
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install build dependencies
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm install --no-audit --no-fund
+
+      - name: Download and checksum original artwork installer
+        run: npm run download:base
+
+      - name: Extract original artwork runtime from NSIS payload
+        shell: pwsh
+        run: ./scripts/extract-base.ps1
+
+      - name: Patch original app without replacing its design
+        env:
+          BASE_INSTALL_DIR: 'C:\GSP680BASE'
+        run: npm run patch:base
+
+      - name: Validate original logo artwork and release code
+        shell: pwsh
+        run: |
+          node --check work/app-extracted/main.js
+          node --check work/app-extracted/preload.js
+          node --check work/app-extracted/dist/renderer.js
+          node --check work/app-extracted/dist/manual-693.js
+          node --check work/app-extracted/dist/release-693.js
+          $index=Get-Content 'work/app-extracted/dist/index.html' -Raw
+          foreach($required in @('goldslots-brand.css','public-release.css','casino-premium-3d.css','manual-693.css','release-693.css','goldslots-logo.svg')){if($index -notmatch [regex]::Escape($required)){throw "Missing original visual reference: $required"}}
+          $games=@('lucky-reels','five-card-poker','jacks-or-better','blackjack-21','keno','roulette','money-wheel','bingo','hi-lo-cards','baccarat','craps')
+          foreach($game in $games){
+            foreach($folder in @('game-menu','game-screens')){
+              $asset="work/app-extracted/assets/$folder/$game.webp"
+              if(!(Test-Path $asset) -or (Get-Item $asset).Length -lt 8000){throw "Missing original artwork: $folder/$game.webp"}
+            }
+          }
+          if((Get-ChildItem work/prepackaged -Recurse -File -Filter '*.ps1').Count){throw 'PowerShell runtime file detected.'}
+          $manual=Get-Content 'work/app-extracted/dist/manual-693.js' -Raw
+          if($manual -notmatch 'BLACKJACK_HIT' -or $manual -notmatch 'BLACKJACK_STAND' -or $manual -notmatch 'POKER_DEAL' -or $manual -notmatch 'POKER_DRAW'){throw 'Manual game flow is incomplete.'}
+          if($manual -match 'dispatchEvent\s*\(|new\s+MouseEvent'){throw 'Synthetic click forwarding is not allowed.'}
+
+      - name: Screenshot and native-click test prepackaged original app
+        shell: pwsh
+        env:
+          GS_PLAYER_UI_TEST: '1'
+        run: |
+          $env:GS_PLAYER_EXE=Join-Path $env:GITHUB_WORKSPACE 'goldslots-player-693\work\prepackaged\Gold Slots Player.exe'
+          $env:GS_TEST_LABEL='prepackaged'
+          npm run test:visual
+
+      - name: Build proper assisted NSIS installer
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run dist
+
+      - name: Install final EXE and repeat all screenshot and click tests
+        shell: pwsh
+        env:
+          GS_PLAYER_UI_TEST: '1'
+        run: |
+          $ErrorActionPreference='Stop'
+          $installer=Resolve-Path 'release/GoldSlots-Player-Setup-6.9.3.exe'
+          if((Get-Item $installer).Length -lt 70000000){throw 'Installer does not contain the full original artwork package.'}
+          & 7z l $installer|Out-File 'release/INSTALLER-CONTENTS.txt' -Encoding utf8
+          if($LASTEXITCODE -ne 0){throw 'Final installer is not readable.'}
+          $installDir='C:\GSP693QA'
+          if(Test-Path $installDir){Remove-Item $installDir -Recurse -Force}
+          $p=Start-Process -FilePath $installer -ArgumentList '/S',('/D='+$installDir) -Wait -PassThru
+          if($p.ExitCode -ne 0){throw "Final installer failed: $($p.ExitCode)"}
+          $appExe=Join-Path $installDir 'Gold Slots Player.exe'
+          if(!(Test-Path $appExe) -or !(Test-Path (Join-Path $installDir 'resources\app.asar'))){throw 'Installed app is incomplete.'}
+          if((Get-ChildItem $installDir -Recurse -File -Filter '*.ps1').Count){throw 'Installed app contains PowerShell.'}
+          $env:GS_PLAYER_EXE=$appExe
+          $env:GS_TEST_LABEL='installed'
+          npm run test:visual
+          Remove-Item Env:GS_PLAYER_EXE -ErrorAction SilentlyContinue
+          Remove-Item Env:GS_TEST_LABEL -ErrorAction SilentlyContinue
+          $shortcut=@((Join-Path $env:PUBLIC 'Desktop\Gold Slots Player.lnk'),(Join-Path ([Environment]::GetFolderPath('Desktop')) 'Gold Slots Player.lnk'))|Where-Object{Test-Path $_}|Select-Object -First 1
+          if(-not $shortcut){throw 'Desktop shortcut missing.'}
+          $uninstaller=Get-ChildItem $installDir -File|Where-Object{$_.Name -match '^Uninstall.*\.exe$'}|Select-Object -First 1
+          if(-not $uninstaller){throw 'Uninstaller missing.'}
+          $u=Start-Process $uninstaller.FullName -ArgumentList '/S' -Wait -PassThru
+          if($u.ExitCode -ne 0){throw "Uninstaller failed: $($u.ExitCode)"}
+          Start-Sleep 3
+          if(Test-Path $appExe){throw 'Uninstall did not remove executable.'}
+          $sha256=(Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          $sha512=(Get-FileHash $installer -Algorithm SHA512).Hash.ToLowerInvariant()
+          $size=(Get-Item $installer).Length
+          "SHA256=$sha256"|Out-File 'release/SHA256.txt' -Encoding ascii
+          "SHA512=$sha512"|Out-File 'release/SHA512.txt' -Encoding ascii
+          "SIZE=$size"|Out-File 'release/SIZE.txt' -Encoding ascii
+          @'
+          GOLD SLOTS PLAYER 6.9.3 — ORIGINAL PREMIUM VISUAL RELEASE
+          Passed Windows source and installed-app screenshot tests.
+          Original Gold Slots logo and eleven lobby WEBP artworks loaded.
+          Original premium brand and 3D design styles remained active.
+          All eleven game cards opened by native mouse click.
+          Responsive layouts passed at 1024x576, 1366x768, 1920x1080 and 800x1000.
+          Manual Hi-Lo, Blackjack Deal/Hit/Stand and Poker Deal/Hold/Draw passed.
+          Sound mixer, normal non-kiosk startup, shortcut and uninstaller passed.
+          No synthetic mouse forwarding or PowerShell runtime files.
+          '@|Out-File 'release/README.txt' -Encoding utf8
+
+      - name: Upload visual proof and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GoldSlots-Player-6.9.3-Original-Visual-Proof-V2
+          path: |
+            goldslots-player-693/visual-proof/**
+            goldslots-player-693/work/*.txt
+            goldslots-player-693/work/*.json
+            goldslots-player-693/release/*.txt
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload verified installer
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GoldSlots-Player-6.9.3-Original-Visual-Installer
+          path: |
+            goldslots-player-693/release/GoldSlots-Player-Setup-6.9.3.exe
+            goldslots-player-693/release/SHA256.txt
+            goldslots-player-693/release/SHA512.txt
+            goldslots-player-693/release/SIZE.txt
+            goldslots-player-693/release/README.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30

@@ -1,0 +1,25 @@
+name: Public Windows Runner Diagnostic
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Verify public Windows runner
+        shell: pwsh
+        run: |
+          Write-Host "Public Windows runner is working"
+          node --version
+          Get-ComputerInfo | Select-Object WindowsProductName, OsArchitecture
+
+  ubuntu:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify public Ubuntu runner
+        run: |
+          echo "Public Ubuntu runner is working"
+          node --version

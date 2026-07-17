@@ -23,8 +23,8 @@ try {
   console.log(\`[native-click] ${'${label}'} at ${'${x.toFixed(1)}'},${'${y.toFixed(1)}'}\`);
   await bounded(input.send('Input.dispatchMouseEvent', { type:'mouseMoved', x, y, button:'none', buttons:0 }), 'move');
   await bounded(input.send('Input.dispatchMouseEvent', { type:'mousePressed', x, y, button:'left', buttons:1, clickCount:1 }), 'press');
-  await bounded(input.send('Input.dispatchMouseEvent', { type:'mouseReleased', x, y, button:'left', buttons:0, clickCount:1 }), 'release');
-  await page.waitForTimeout(100);
+  input.send('Input.dispatchMouseEvent', { type:'mouseReleased', x, y, button:'left', buttons:0, clickCount:1 }).catch(() => {});
+  await page.waitForTimeout(180);
 }`;
 
   if (!source.includes('Input.dispatchMouseEvent')) {
@@ -42,6 +42,7 @@ try {
   const check = spawnSync(process.execPath, ['--check', target], { encoding:'utf8' });
   const diagnostic = [
     'Reusable CDP native-click patch applied.',
+    'Release events are sent without waiting for renderer rerender acknowledgement.',
     `syntax_status=${check.status}`,
     check.stdout || '',
     check.stderr || ''

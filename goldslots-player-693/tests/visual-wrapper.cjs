@@ -14,7 +14,21 @@ source = source.replace(
 );
 source = source.replace(
   "    await page.waitForSelector('.game-grid', { timeout: 30000 });\n\n    const sizes",
-  "    await page.waitForSelector('.game-grid', { timeout: 30000 });\n    await page.screenshot({ path: path.join(SHOTS, 'raw-first-lobby.png') });\n\n    const sizes"
+  `    await page.waitForSelector('.game-grid', { state: 'attached', timeout: 30000 });
+    const initialLayout = await page.evaluate(() => {
+      const pick = (selector) => {
+        const node = document.querySelector(selector);
+        if (!node) return null;
+        const rect = node.getBoundingClientRect();
+        const style = getComputedStyle(node);
+        return { selector, rect:{x:rect.x,y:rect.y,width:rect.width,height:rect.height}, display:style.display, visibility:style.visibility, opacity:style.opacity, overflow:style.overflow, gridRows:style.gridTemplateRows, gridColumns:style.gridTemplateColumns };
+      };
+      return { readyState:document.readyState, visibilityState:document.visibilityState, viewport:{width:innerWidth,height:innerHeight}, shell:pick('.shell'), content:pick('.content'), lobby:pick('.lobby'), grid:pick('.game-grid'), firstCard:pick('.game-tile'), logo:pick('.gc-mark') };
+    });
+    fs.writeFileSync(path.join(SHOTS, 'INITIAL-LAYOUT.json'), JSON.stringify(initialLayout, null, 2));
+    await page.screenshot({ path: path.join(SHOTS, 'raw-first-lobby.png') });
+
+    const sizes`
 );
 source = source.replace(
   '    await app.close();',

@@ -1,0 +1,51 @@
+{
+  "name": "goldslots-player-original-visual-build",
+  "version": "6.9.3",
+  "private": true,
+  "description": "Gold Slots Player 6.9.3 original premium visual release with native clicks, manual decisions and responsive Windows terminal layouts.",
+  "scripts": {
+    "download:base": "node scripts/download-base.cjs",
+    "patch:base": "node scripts/patch-base-wrapper.cjs",
+    "test:visual": "node tests/release-safe-smoke.cjs",
+    "dist": "node scripts/build-nsis.cjs"
+  },
+  "devDependencies": {
+    "@electron/asar": "3.4.1",
+    "electron-builder": "25.1.8",
+    "playwright-core": "1.51.1",
+    "png-to-ico": "2.1.8",
+    "sharp": "0.33.5"
+  },
+  "build": {
+    "appId": "ai.goldslots.player",
+    "productName": "Gold Slots Player",
+    "artifactName": "GoldSlots-Player-Setup-${version}.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Gold Slots Player",
+      "runAfterFinish": false,
+      "deleteAppDataOnUninstall": false,
+      "differentialPackage": false,
+      "uninstallDisplayName": "Gold Slots Player 6.9.3"
+    }
+  }
+}

@@ -37,6 +37,18 @@ async function setSize(app, page, cdp, width, height) {
   });
 }
 
+async function nativeClick(page, locator, label) {
+  await locator.waitFor({ state:'visible', timeout:10000 });
+  const box = await locator.boundingBox();
+  assert.ok(box && box.width > 2 && box.height > 2, `${label} must have a native clickable area.`);
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.waitForTimeout(90);
+}
+
 async function layoutSnapshot(page) {
   return page.evaluate(() => {
     const pick = (selector) => {
@@ -147,7 +159,7 @@ async function verifyLobby(page, width, height) {
     await setSize(app,page,cdp,1024,576);
     await page.waitForTimeout(220);
     for (const key of GAMES) {
-      await page.locator(`button.game-tile[data-key="${key}"]`).click();
+      await nativeClick(page,page.locator(`button.game-tile[data-key="${key}"]`),`${key} lobby card`);
       await page.waitForSelector('.game-shell',{state:'attached'});
       const stage = await page.evaluate((gameKey) => {
         const shell=document.querySelector('.game-shell');
@@ -160,48 +172,48 @@ async function verifyLobby(page, width, height) {
       assert.ok(stage.shell && stage.rect?.width > 300 && stage.rect?.height > 180, `${key} original game stage must be visible.`);
       assert.ok(stage.images.some((image)=>image.complete&&image.width>0&&image.height>0) || /game-screens/i.test(stage.styled), `${key} must retain rendered visual assets.`);
       fs.writeFileSync(path.join(PROOF,`game-${key}.json`),JSON.stringify(stage,null,2));
-      await page.locator('[data-action="lobby"]').click();
+      await nativeClick(page,page.locator('[data-action="lobby"]'),'Return to lobby');
       await page.waitForSelector('.game-grid',{state:'attached'});
     }
 
-    await page.locator('button.game-tile[data-key="hi-lo-cards"]').click();
+    await nativeClick(page,page.locator('button.game-tile[data-key="hi-lo-cards"]'),'Hi-Lo lobby card');
     assert.equal(await page.locator('.play-action').isDisabled(),true,'Hi-Lo must start without a wager or automatic choice.');
-    await page.locator('[data-action="bet"]').first().click();
+    await nativeClick(page,page.locator('[data-action="bet"]').first(),'Hi-Lo stake');
     assert.equal(await page.locator('.play-action').isDisabled(),true,'Stake alone must not choose Higher or Lower.');
-    await page.locator('[data-action="choice"][data-key="hiLoPick"][data-value="higher"]').click();
+    await nativeClick(page,page.locator('[data-action="choice"][data-key="hiLoPick"][data-value="higher"]'),'Hi-Lo Higher');
     assert.equal(await page.locator('.play-action').isEnabled(),true,'Manual Higher choice must enable Hi-Lo play.');
-    await page.locator('[data-action="lobby"]').click();
+    await nativeClick(page,page.locator('[data-action="lobby"]'),'Return to lobby');
 
     await page.evaluate(()=>{state.demoSession=true;state.demoBalanceCents=500000;Math.random=()=>0.31;render(true);});
     await page.waitForSelector('.game-grid',{state:'attached'});
-    await page.locator('button.game-tile[data-key="blackjack-21"]').click();
-    await page.locator('[data-action="bet"]').first().click();
-    await page.locator('.play-action').click();
+    await nativeClick(page,page.locator('button.game-tile[data-key="blackjack-21"]'),'Blackjack lobby card');
+    await nativeClick(page,page.locator('[data-action="bet"]').first(),'Blackjack stake');
+    await nativeClick(page,page.locator('.play-action'),'Blackjack Deal');
     await page.waitForTimeout(350);
     if(await page.locator('[data-action="blackjack-hit"]').count()){
-      await page.locator('[data-action="blackjack-hit"]').click();
+      await nativeClick(page,page.locator('[data-action="blackjack-hit"]'),'Blackjack Hit');
       await page.waitForTimeout(250);
-      if(await page.locator('[data-action="blackjack-stand"]').count())await page.locator('[data-action="blackjack-stand"]').click();
+      if(await page.locator('[data-action="blackjack-stand"]').count())await nativeClick(page,page.locator('[data-action="blackjack-stand"]'),'Blackjack Stand');
     }
     await page.waitForTimeout(300);
     assert.equal(await page.locator('.round-result').count(),1,'Blackjack Deal and manual Hit/Stand must complete.');
-    await page.locator('[data-action="lobby"]').click();
+    await nativeClick(page,page.locator('[data-action="lobby"]'),'Return to lobby');
 
-    await page.locator('button.game-tile[data-key="jacks-or-better"]').click();
-    await page.locator('[data-action="bet"]').first().click();
-    await page.locator('.play-action').click();
+    await nativeClick(page,page.locator('button.game-tile[data-key="jacks-or-better"]'),'Jacks or Better lobby card');
+    await nativeClick(page,page.locator('[data-action="bet"]').first(),'Poker stake');
+    await nativeClick(page,page.locator('.play-action'),'Poker Deal');
     await page.waitForSelector('[data-action="poker-hold"]');
-    await page.locator('[data-action="poker-hold"]').first().click();
+    await nativeClick(page,page.locator('[data-action="poker-hold"]').first(),'Poker Hold');
     assert.ok((await page.locator('[data-action="poker-hold"]').first().getAttribute('class')).includes('held'),'Poker Hold must remain visibly selected.');
-    await page.locator('[data-action="poker-draw"]').click();
+    await nativeClick(page,page.locator('[data-action="poker-draw"]'),'Poker Draw');
     await page.waitForTimeout(400);
     assert.equal(await page.locator('[data-action="poker-hold"]').count(),0,'Poker Draw must finish the hand.');
-    await page.locator('[data-action="lobby"]').click();
+    await nativeClick(page,page.locator('[data-action="lobby"]'),'Return to lobby');
 
-    await page.locator('[data-action="sound-open"]').click();
+    await nativeClick(page,page.locator('[data-action="sound-open"]'),'Open sound mixer');
     await page.waitForSelector('.sound-mixer',{state:'attached'});
-    await page.locator('[data-action="sound-toggle"][data-key="effects"]').click();
-    await page.locator('[data-action="sound-close"]').click();
+    await nativeClick(page,page.locator('[data-action="sound-toggle"][data-key="effects"]'),'Toggle effects sound');
+    await nativeClick(page,page.locator('[data-action="sound-close"]'),'Close sound mixer');
     assert.equal(await page.locator('.sound-mixer').count(),0,'Sound mixer must open, respond, and close.');
 
     const windowState=await app.evaluate(({BrowserWindow})=>{const win=BrowserWindow.getAllWindows()[0];return{kiosk:win.isKiosk(),fullscreen:win.isFullScreen(),alwaysOnTop:win.isAlwaysOnTop()};});

@@ -5,7 +5,7 @@
   "description": "Gold Slots Player 6.9.3 original premium visual release with native clicks, manual decisions and responsive Windows terminal layouts.",
   "scripts": {
     "download:base": "node scripts/download-base.cjs",
-    "patch:base": "node scripts/patch-base.cjs",
+    "patch:base": "node scripts/patch-base-wrapper.cjs",
     "test:visual": "node tests/visual-installed.e2e.cjs",
     "dist": "electron-builder --win nsis --x64 --prepackaged work/prepackaged"
   },

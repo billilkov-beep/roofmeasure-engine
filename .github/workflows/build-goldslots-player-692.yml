@@ -1,0 +1,124 @@
+name: Build Gold Slots Player 6.9.2 Production Release
+
+on:
+  push:
+    branches:
+      - release/goldslots-player-6.9.2
+    paths:
+      - 'goldslots-player/**'
+      - '.github/workflows/build-goldslots-player-692.yml'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'goldslots-player/**'
+      - '.github/workflows/build-goldslots-player-692.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-install-test-release:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        working-directory: goldslots-player
+    steps:
+      - name: Checkout clean public build source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install build dependencies
+        shell: pwsh
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: |
+          npm install --no-audit --no-fund
+          npm install --no-save @resvg/resvg-js png-to-ico --no-audit --no-fund
+
+      - name: Generate branded Windows icon
+        run: node scripts/make-icon.cjs
+
+      - name: Static production safety validation
+        shell: pwsh
+        run: |
+          node --check main.js
+          node --check preload.js
+          node --check ui/app.js
+          node --check tests/player.e2e.cjs
+          $main = Get-Content 'main.js' -Raw
+          $ui = Get-Content 'ui/app.js' -Raw
+          if ($main -match 'powershell\.exe|\.ps1') { throw 'PowerShell runtime reference detected.' }
+          if ($ui -match 'dispatchEvent\s*\(|new\s+MouseEvent|\.click\s*\(') { throw 'Synthetic click code detected.' }
+          if ($ui -match 'setInterval\s*\([^)]*(play|spin|deal)') { throw 'Autoplay loop detected.' }
+          if ($ui -notmatch 'BLACKJACK_HIT' -or $ui -notmatch 'BLACKJACK_STAND') { throw 'Manual Blackjack decisions are missing.' }
+          if ($ui -notmatch 'POKER_DEAL' -or $ui -notmatch 'POKER_DRAW') { throw 'Manual Poker Deal/Draw is missing.' }
+          if ($ui -notmatch 'SELECT HIGHER OR LOWER') { throw 'Manual Hi-Lo choice is missing.' }
+          if ($main -notmatch 'kioskLocked = false' -or $main -notmatch 'policyReceived = false') { throw 'Safe non-kiosk startup is missing.' }
+          if (-not (Test-Path 'build/icon.ico')) { throw 'Windows icon was not generated.' }
+
+      - name: Launch and click-test source Electron app
+        shell: pwsh
+        env:
+          GS_PLAYER_UI_TEST: '1'
+        run: npm run test:ui
+
+      - name: Build proper assisted NSIS installer
+        shell: pwsh
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run dist
+
+      - name: Install generated EXE and test installed Player
+        shell: pwsh
+        env:
+          GS_PLAYER_UI_TEST: '1'
+        run: ./scripts/install-test.ps1
+
+      - name: Upload build and test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GoldSlots-Player-6.9.2-Diagnostics
+          path: |
+            goldslots-player/release/*.txt
+            goldslots-player/release/GoldSlots-Player-Setup-6.9.2.exe
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 30
+
+      - name: Publish only the verified installer
+        if: success() && github.event_name != 'pull_request'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = 'goldslots-player-v6.9.2-production'
+          $files = @('release/GoldSlots-Player-Setup-6.9.2.exe','release/SHA256.txt','release/SHA512.txt','release/SIZE.txt','release/README.txt','release/INSTALLER-CONTENTS.txt')
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @files --repo $env:GITHUB_REPOSITORY --clobber
+            gh release edit $tag --repo $env:GITHUB_REPOSITORY --title 'Gold Slots Player 6.9.2 Production Installer' --notes 'Published only after Windows installation, installed-app launch, native click, manual game, responsive layout, shortcut and uninstall tests passed.'
+          } else {
+            gh release create $tag @files --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title 'Gold Slots Player 6.9.2 Production Installer' --notes 'Published only after Windows installation, installed-app launch, native click, manual game, responsive layout, shortcut and uninstall tests passed.'
+          }
+
+      - name: Upload verified workflow artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GoldSlots-Player-6.9.2-Production-Installer
+          path: |
+            goldslots-player/release/GoldSlots-Player-Setup-6.9.2.exe
+            goldslots-player/release/SHA256.txt
+            goldslots-player/release/SHA512.txt
+            goldslots-player/release/SIZE.txt
+            goldslots-player/release/README.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30

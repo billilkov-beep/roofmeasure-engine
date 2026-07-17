@@ -1,0 +1,97 @@
+name: Gold Slots Player 6.9.3 Final Installer
+
+on:
+  push:
+    branches: [release/goldslots-player-6.9.3-original-visual]
+    paths:
+      - 'goldslots-player-693/**'
+      - '.github/workflows/goldslots-player-693-final-installer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: goldslots-player-693-final
+  cancel-in-progress: true
+
+jobs:
+  build-verify:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: goldslots-player-693
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies and NSIS
+        shell: pwsh
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: |
+          npm install --no-audit --no-fund
+          choco install nsis -y --no-progress
+          $nsis = 'C:\Program Files (x86)\NSIS\makensis.exe'
+          if (!(Test-Path $nsis)) { throw 'NSIS compiler installation failed.' }
+          "MAKENSIS=$nsis" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prepare original premium Player runtime
+        shell: pwsh
+        run: |
+          npm run download:base
+          ./scripts/extract-base.ps1
+          $env:BASE_INSTALL_DIR = 'C:\GSP680BASE'
+          npm run patch:base
+          node scripts/final-validate.cjs
+          node scripts/make-artwork-proof.cjs
+
+      - name: Windows launch test before installer build
+        shell: pwsh
+        env:
+          GS_PLAYER_UI_TEST: '1'
+        run: |
+          $app = Join-Path $env:GITHUB_WORKSPACE 'goldslots-player-693\work\prepackaged\Gold Slots Player.exe'
+          $process = Start-Process -FilePath $app -ArgumentList '--disable-gpu' -PassThru
+          Start-Sleep -Seconds 10
+          if ($process.HasExited) { throw "Prepackaged Player exited with code $($process.ExitCode)." }
+          Stop-Process -Id $process.Id -Force
+
+      - name: Build NSIS Player installer
+        shell: pwsh
+        run: npm run dist
+
+      - name: Install launch shortcut and uninstall verification
+        shell: pwsh
+        run: ./scripts/final-install-test.ps1
+
+      - name: Upload visual proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: GoldSlots-Player-6.9.3-Visual-Proof
+          path: |
+            goldslots-player-693/visual-proof/**
+            goldslots-player-693/work/FINAL-VALIDATION.json
+            goldslots-player-693/work/PATCH-SUMMARY.json
+            goldslots-player-693/release/BUILD-OUTPUT.txt
+            goldslots-player-693/release/INSTALLER-CONTENTS.txt
+            goldslots-player-693/release/README.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload verified Player installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: GoldSlots-Player-6.9.3-Original-Visual-Verified
+          path: |
+            goldslots-player-693/release/GoldSlots-Player-Setup-6.9.3.exe
+            goldslots-player-693/release/SHA256.txt
+            goldslots-player-693/release/SHA512.txt
+            goldslots-player-693/release/SIZE.txt
+            goldslots-player-693/release/README.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30

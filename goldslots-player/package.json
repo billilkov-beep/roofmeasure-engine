@@ -2,7 +2,7 @@
   "name": "goldslots-player",
   "version": "6.9.2",
   "description": "Gold Slots Player production terminal with manual real-money decisions, responsive layouts and safe policy-controlled kiosk mode.",
-  "main": "main.js",
+  "main": "bootstrap.js",
   "private": true,
   "scripts": {
     "start": "electron .",
@@ -20,6 +20,7 @@
     "artifactName": "GoldSlots-Player-Setup-${version}.${ext}",
     "asar": true,
     "files": [
+      "bootstrap.js",
       "main.js",
       "preload.js",
       "ui/**/*",

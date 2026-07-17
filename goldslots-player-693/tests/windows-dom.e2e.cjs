@@ -11,7 +11,7 @@ const GAMES = ['lucky-reels','five-card-poker','jacks-or-better','blackjack-21',
 if (!EXE) throw new Error('GS_PLAYER_EXE is required.');
 fs.mkdirSync(PROOF, { recursive:true });
 
-async function setSize(app, width, height) {
+async function setSize(app, page, cdp, width, height) {
   await app.evaluate(({ BrowserWindow }, value) => {
     const win = BrowserWindow.getAllWindows()[0];
     win.show();
@@ -19,9 +19,22 @@ async function setSize(app, width, height) {
     win.setKiosk(false);
     win.setFullScreen(false);
     win.setAlwaysOnTop(false);
-    win.setSize(value.width, value.height, false);
+    win.setSize(Math.min(value.width, 1024), Math.min(value.height, 720), false);
     win.center();
   }, { width, height });
+  await cdp.send('Emulation.setDeviceMetricsOverride', {
+    width,
+    height,
+    deviceScaleFactor:1,
+    mobile:false,
+    screenWidth:width,
+    screenHeight:height,
+    screenOrientation:{ type:height > width ? 'portraitPrimary' : 'landscapePrimary', angle:0 }
+  });
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('resize'));
+    window.dispatchEvent(new Event('orientationchange'));
+  });
 }
 
 async function layoutSnapshot(page) {
@@ -83,8 +96,8 @@ async function verifyLobby(page, width, height) {
   }
 
   const viewport = layout.viewport;
-  assert.ok(Math.abs(viewport.width - width) < 55, `Expected responsive width near ${width}; received ${viewport.width}.`);
-  assert.ok(Math.abs(viewport.height - height) < 110, `Expected responsive height near ${height}; received ${viewport.height}.`);
+  assert.ok(Math.abs(viewport.width - width) < 5, `Expected responsive width ${width}; received ${viewport.width}.`);
+  assert.ok(Math.abs(viewport.height - height) < 5, `Expected responsive height ${height}; received ${viewport.height}.`);
   const boxes = [];
   for (let index = 0; index < 11; index += 1) {
     const box = await cards.nth(index).boundingBox();
@@ -115,6 +128,7 @@ async function verifyLobby(page, width, height) {
   try {
     try { childProcess = app.process(); } catch {}
     const page = await app.firstWindow();
+    const cdp = await page.context().newCDPSession(page);
     page.setDefaultTimeout(10000);
     page.setDefaultNavigationTimeout(10000);
     const errors=[];
@@ -125,13 +139,13 @@ async function verifyLobby(page, width, height) {
 
     const proof = {};
     for (const [width,height] of [[1024,576],[1366,768],[1920,1080],[800,1000]]) {
-      await setSize(app,width,height);
-      await page.waitForTimeout(180);
+      await setSize(app,page,cdp,width,height);
+      await page.waitForTimeout(220);
       proof[`${width}x${height}`]=await verifyLobby(page,width,height);
     }
 
-    await setSize(app,1366,768);
-    await page.waitForTimeout(180);
+    await setSize(app,page,cdp,1024,576);
+    await page.waitForTimeout(220);
     for (const key of GAMES) {
       await page.locator(`button.game-tile[data-key="${key}"]`).click();
       await page.waitForSelector('.game-shell',{state:'attached'});

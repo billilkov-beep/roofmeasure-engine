@@ -13,7 +13,7 @@ source = source.replace(
   "    const page = await app.firstWindow();\n    page.setDefaultTimeout(7000);\n    page.setDefaultNavigationTimeout(7000);"
 );
 source = source.replace(
-  "    await page.waitForSelector('.game-grid', { timeout: 30000 });\n\n    const sizes",
+  /    await page\.waitForSelector\('\.game-grid', \{ timeout: 30000 \}\);\r?\n\r?\n    const sizes/,
   `    await page.waitForSelector('.game-grid', { state: 'attached', timeout: 30000 });
     const initialLayout = await page.evaluate(() => {
       const pick = (selector) => {

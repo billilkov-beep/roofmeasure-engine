@@ -6,7 +6,7 @@
   "scripts": {
     "download:base": "node scripts/download-base.cjs",
     "patch:base": "node scripts/patch-base-wrapper.cjs",
-    "test:visual": "node tests/windows-dom.e2e.cjs",
+    "test:visual": "node tests/windows-dom-wrapper.cjs",
     "dist": "electron-builder --win nsis --x64 --prepackaged work/prepackaged"
   },
   "devDependencies": {

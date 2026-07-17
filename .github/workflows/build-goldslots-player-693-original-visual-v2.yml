@@ -16,6 +16,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: goldslots-player-693-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   original-visual-windows-release:
     runs-on: windows-latest
@@ -54,6 +58,8 @@ jobs:
           node --check work/app-extracted/dist/renderer.js
           node --check work/app-extracted/dist/manual-693.js
           node --check work/app-extracted/dist/release-693.js
+          node --check tests/apply-cdp-native-click.cjs
+          node --check tests/windows-dom.e2e.cjs
           $index=Get-Content 'work/app-extracted/dist/index.html' -Raw
           foreach($required in @('goldslots-brand.css','public-release.css','casino-premium-3d.css','manual-693.css','release-693.css','manual-693.js','release-693.js','goldslots-logo.svg')){if($index -notmatch [regex]::Escape($required)){throw "Missing original visual reference: $required"}}
           $games=@('lucky-reels','five-card-poker','jacks-or-better','blackjack-21','keno','roulette','money-wheel','bingo','hi-lo-cards','baccarat','craps')
@@ -72,13 +78,17 @@ jobs:
         run: node scripts/make-artwork-proof.cjs
 
       - name: Test prepackaged Player artwork bounds and native clicks
+        timeout-minutes: 10
         shell: pwsh
         env:
           GS_PLAYER_UI_TEST: '1'
         run: |
           $env:GS_PLAYER_EXE=Join-Path $env:GITHUB_WORKSPACE 'goldslots-player-693\work\prepackaged\Gold Slots Player.exe'
           $env:GS_TEST_LABEL='prepackaged'
-          npm run test:visual
+          New-Item -ItemType Directory -Force -Path 'visual-proof/prepackaged' | Out-Null
+          npm run test:visual 2>&1 | Tee-Object -FilePath 'visual-proof/prepackaged/NPM-TEST-OUTPUT.txt'
+          $testExit=$LASTEXITCODE
+          if($testExit -ne 0){throw "Prepackaged Player test failed with exit code $testExit."}
 
       - name: Build proper assisted NSIS installer
         env:
@@ -86,6 +96,7 @@ jobs:
         run: npm run dist
 
       - name: Install final EXE and repeat artwork and click tests
+        timeout-minutes: 20
         shell: pwsh
         env:
           GS_PLAYER_UI_TEST: '1'
@@ -104,7 +115,10 @@ jobs:
           if((Get-ChildItem $installDir -Recurse -File -Filter '*.ps1').Count){throw 'Installed app contains PowerShell.'}
           $env:GS_PLAYER_EXE=$appExe
           $env:GS_TEST_LABEL='installed'
-          npm run test:visual
+          New-Item -ItemType Directory -Force -Path 'visual-proof/installed' | Out-Null
+          npm run test:visual 2>&1 | Tee-Object -FilePath 'visual-proof/installed/NPM-TEST-OUTPUT.txt'
+          $testExit=$LASTEXITCODE
+          if($testExit -ne 0){throw "Installed Player test failed with exit code $testExit."}
           Remove-Item Env:GS_PLAYER_EXE -ErrorAction SilentlyContinue
           Remove-Item Env:GS_TEST_LABEL -ErrorAction SilentlyContinue
           $shortcut=@((Join-Path $env:PUBLIC 'Desktop\Gold Slots Player.lnk'),(Join-Path ([Environment]::GetFolderPath('Desktop')) 'Gold Slots Player.lnk'))|Where-Object{Test-Path $_}|Select-Object -First 1

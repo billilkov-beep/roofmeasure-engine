@@ -7,8 +7,8 @@ body{overscroll-behavior:none!important}
 .topbar{height:var(--gs-header)!important;min-height:0!important;padding:6px clamp(10px,1.2vw,22px)!important;overflow:hidden!important}
 .content{height:auto!important;min-height:0!important;padding:clamp(6px,.8vw,12px)!important;overflow:hidden!important}
 .footer{height:var(--gs-footer)!important;min-height:0!important;padding:5px clamp(10px,1.1vw,20px)!important;overflow:hidden!important}
-.lobby{width:100%!important;height:100%!important;min-height:0!important;max-width:none!important;display:grid!important;grid-template-rows:minmax(0,var(--gs-lobby-head)) auto minmax(0,1fr)!important;gap:6px!important;overflow:hidden!important}
-.lobby:not(:has(>.message)){grid-template-rows:minmax(0,var(--gs-lobby-head)) 0 minmax(0,1fr)!important}
+.lobby{width:100%!important;height:100%!important;min-height:0!important;max-width:none!important;display:grid!important;grid-template-rows:minmax(0,var(--gs-lobby-head)) minmax(0,1fr) auto!important;gap:6px!important;overflow:hidden!important}
+.lobby:not(:has(>.message)){grid-template-rows:minmax(0,var(--gs-lobby-head)) minmax(0,1fr) 0!important}
 .lobby-head{height:100%!important;min-height:0!important;margin:0!important;padding:8px 14px!important;overflow:hidden!important;align-items:center!important}
 .lobby-head h1{margin:0 0 3px!important;font-size:clamp(22px,4vh,42px)!important;line-height:1!important}.lobby-head p{margin:0!important;font-size:clamp(9px,1.45vh,14px)!important;line-height:1.15!important}
 .lobby>.message{position:relative!important;z-index:2!important;width:100%!important;min-height:0!important;max-height:40px!important;margin:0!important;padding:7px 12px!important;overflow:hidden!important;display:flex!important;align-items:center!important;font-size:clamp(9px,1.5vh,14px)!important;pointer-events:none!important}

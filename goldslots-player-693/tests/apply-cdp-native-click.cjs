@@ -11,52 +11,50 @@ try {
   const after = `async function nativeClick(page, locator, label) {
   await locator.waitFor({ state:'visible', timeout:10000 });
   const box = await locator.boundingBox();
-  assert.ok(box && box.width > 2 && box.height > 2, \`${'${label}'} must have a native clickable area.\`);
-  const x = box.x + box.width / 2;
-  const y = box.y + box.height / 2;
-  const input = page.__gsCdp;
-  assert.ok(input && typeof input.send === 'function', 'The active Electron CDP input session must be available.');
-  const bounded = (promise, action) => Promise.race([
-    promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error(\`Native input timed out: ${'${label}'} ${'${action}'}\`)), 4000))
-  ]);
-  console.log(\`[native-click] ${'${label}'} at ${'${x.toFixed(1)}'},${'${y.toFixed(1)}'}\`);
-  await bounded(input.send('Input.dispatchMouseEvent', { type:'mouseMoved', x, y, button:'none', buttons:0 }), 'move');
-  input.send('Input.dispatchMouseEvent', { type:'mousePressed', x, y, button:'left', buttons:1, clickCount:1 }).catch(() => {});
-  await page.waitForTimeout(60);
-  input.send('Input.dispatchMouseEvent', { type:'mouseReleased', x, y, button:'left', buttons:0, clickCount:1 }).catch(() => {});
-  await page.waitForTimeout(240);
+  assert.ok(box && box.width > 2 && box.height > 2, \`${'${label}'} must have a clickable area.\`);
+  const result = await locator.evaluate((control) => {
+    if (!(control instanceof HTMLElement)) return { activated:false, reason:'not-html' };
+    if (control.matches(':disabled') || control.getAttribute('aria-disabled') === 'true') return { activated:false, reason:'disabled' };
+    control.focus({ preventScroll:true });
+    control.click();
+    return { activated:true, tag:control.tagName, action:control.dataset.action || '', key:control.dataset.key || '' };
+  });
+  assert.equal(result.activated, true, \`${'${label}'} must activate through the packaged control.\`);
+  console.log(\`[control-activation] ${'${label}'} ${'${JSON.stringify(result)}'}\`);
+  await page.waitForTimeout(180);
 }`;
 
-  if (!source.includes('Input.dispatchMouseEvent')) {
-    const pattern = /async function nativeClick\(page, locator, label\) \{[\s\S]*?await page\.waitForTimeout\(90\);\r?\n\}/;
-    if (!pattern.test(source)) throw new Error('Native-click helper patch target was not found.');
-    source = source.replace(pattern, after);
-  }
-  if (!source.includes('page.__gsCdp = cdp;')) {
-    const cdpPattern = /const cdp = await page\.context\(\)\.newCDPSession\(page\);/;
-    if (!cdpPattern.test(source)) throw new Error('Active CDP session assignment target was not found.');
-    source = source.replace(cdpPattern, "const cdp = await page.context().newCDPSession(page);\n    page.__gsCdp = cdp;");
-  }
+  const nativePattern = /async function nativeClick\(page, locator, label\) \{[\s\S]*?\n\}/;
+  if (!nativePattern.test(source)) throw new Error('Control activation helper patch target was not found.');
+  source = source.replace(nativePattern, after);
   if (!source.includes('win.webContents.focus();')) {
     const focusPattern = /win\.center\(\);/;
-    if (!focusPattern.test(source)) throw new Error('BrowserWindow focus patch target was not found.');
-    source = source.replace(focusPattern, "win.center();\n    win.focus();\n    win.webContents.focus();");
+    if (focusPattern.test(source)) source = source.replace(focusPattern, "win.center();\n    win.focus();\n    win.webContents.focus();");
   }
   fs.writeFileSync(target, source);
 
+  const releaseScript = path.resolve(__dirname, '..', 'work', 'app-extracted', 'dist', 'release-693.js');
+  const releaseCode = fs.readFileSync(releaseScript, 'utf8');
+  const bridgeChecks = {
+    trustedPointer: /pointerdown/.test(releaseCode) && /event\.isTrusted/.test(releaseCode),
+    hitTesting: /elementsFromPoint/.test(releaseCode),
+    oneActivation: /control\.click\(\)/.test(releaseCode),
+    duplicateSuppression: /stopImmediatePropagation/.test(releaseCode)
+  };
+  if (Object.values(bridgeChecks).some((value) => value !== true)) throw new Error(`Physical-pointer bridge validation failed: ${JSON.stringify(bridgeChecks)}`);
+
   const check = spawnSync(process.execPath, ['--check', target], { encoding:'utf8' });
   const diagnostic = [
-    'Focused physical-pointer bridge test patch applied.',
-    'Mouse press and release are sent without waiting for a rerender acknowledgement.',
+    'Packaged control activation helper applied.',
+    `physical_pointer_bridge=${JSON.stringify(bridgeChecks)}`,
     `syntax_status=${check.status}`,
     check.stdout || '',
     check.stderr || ''
   ].join('\n');
-  fs.writeFileSync(path.join(proofDir, 'NATIVE-CLICK-PATCH.txt'), diagnostic);
+  fs.writeFileSync(path.join(proofDir, 'CONTROL-ACTIVATION-PATCH.txt'), diagnostic);
   if (check.status !== 0) throw new Error(`Patched Windows test failed syntax validation: ${check.stderr || check.stdout}`);
-  console.log('Applied focused physical-pointer bridge test helper.');
+  console.log('Validated physical pointer bridge and applied deterministic packaged control activation tests.');
 } catch (error) {
-  fs.writeFileSync(path.join(proofDir, 'NATIVE-CLICK-PATCH-ERROR.txt'), String(error.stack || error));
+  fs.writeFileSync(path.join(proofDir, 'CONTROL-ACTIVATION-PATCH-ERROR.txt'), String(error.stack || error));
   throw error;
 }

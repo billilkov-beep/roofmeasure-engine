@@ -7,7 +7,7 @@
     "download:base": "node scripts/download-base.cjs",
     "patch:base": "node scripts/patch-base-wrapper.cjs",
     "test:visual": "node tests/release-safe-smoke.cjs",
-    "dist": "electron-builder --win nsis --x64 --prepackaged work/prepackaged"
+    "dist": "node scripts/build-nsis.cjs"
   },
   "devDependencies": {
     "@electron/asar": "3.4.1",

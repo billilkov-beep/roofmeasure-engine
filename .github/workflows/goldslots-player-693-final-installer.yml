@@ -6,13 +6,18 @@ on:
     paths:
       - 'goldslots-player-693/**'
       - '.github/workflows/goldslots-player-693-final-installer.yml'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'goldslots-player-693/**'
+      - '.github/workflows/goldslots-player-693-final-installer.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: goldslots-player-693-final
+  group: goldslots-player-693-final-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

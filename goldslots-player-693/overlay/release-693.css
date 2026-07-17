@@ -25,6 +25,8 @@ button:disabled,.play-action:disabled{pointer-events:none!important;opacity:.52!
 .choice-deck,.bet-selector,.round-result{min-width:0!important;min-height:0!important}.manual-decisions .choice{pointer-events:auto!important}.poker-card-choice{pointer-events:auto!important}
 html[data-gs-density="compact"] .brand span,html[data-gs-density="compact"] .identity span,html[data-gs-density="compact"] .secure-status small,html[data-gs-density="compact"] .input-status small,html[data-gs-density="compact"] .lobby-head p,html[data-gs-density="compact"] .tile-copy small{display:none!important}
 html[data-gs-orientation="portrait"] .jackpot-strip{display:none!important}html[data-gs-orientation="portrait"] .topbar{grid-template-columns:minmax(0,1fr) auto!important}html[data-gs-orientation="portrait"] .lobby-head p{display:none!important}
+/* The original public stylesheet used a legacy Global Casino mark. The final Player must always show the Gold Slots logo supplied with the original visual package. */
+.gc-mark{font-size:0!important;color:transparent!important;background:url('../assets/brand/goldslots-logo.svg') center/contain no-repeat!important;border:0!important;box-shadow:none!important;overflow:hidden!important}
 @media(max-width:1100px){:root{--gs-cols:4;--gs-rows:3}.game-shell{grid-template-rows:clamp(48px,8vh,66px) minmax(0,1fr) clamp(120px,22vh,178px)!important}}
 @media(max-width:820px){:root{--gs-cols:3;--gs-rows:4;--gs-gap:5px}.brand span,.secure-status small{display:none!important}.tile-copy small{display:none!important}}
 @media(orientation:portrait){:root{--gs-cols:2;--gs-rows:6}.game-shell{grid-template-rows:clamp(54px,7vh,74px) minmax(0,1fr) clamp(190px,25vh,290px)!important}.control-deck{grid-template-columns:1fr 1fr!important}}

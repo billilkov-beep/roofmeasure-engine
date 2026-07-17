@@ -6,7 +6,7 @@
   "scripts": {
     "download:base": "node scripts/download-base.cjs",
     "patch:base": "node scripts/patch-base-wrapper.cjs",
-    "test:visual": "node tests/release-smoke.cjs",
+    "test:visual": "node tests/release-safe-smoke.cjs",
     "dist": "electron-builder --win nsis --x64 --prepackaged work/prepackaged"
   },
   "devDependencies": {

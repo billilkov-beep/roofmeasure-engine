@@ -14,19 +14,16 @@ try {
   assert.ok(box && box.width > 2 && box.height > 2, \`${'${label}'} must have a native clickable area.\`);
   const x = box.x + box.width / 2;
   const y = box.y + box.height / 2;
-  const input = await page.context().newCDPSession(page);
+  const input = page.__gsCdp;
+  assert.ok(input && typeof input.send === 'function', 'The active Electron CDP input session must be available.');
   const bounded = (promise, action) => Promise.race([
     promise,
     new Promise((_, reject) => setTimeout(() => reject(new Error(\`Native input timed out: ${'${label}'} ${'${action}'}\`)), 4000))
   ]);
   console.log(\`[native-click] ${'${label}'} at ${'${x.toFixed(1)}'},${'${y.toFixed(1)}'}\`);
-  try {
-    await bounded(input.send('Input.dispatchMouseEvent', { type:'mouseMoved', x, y, button:'none', buttons:0 }), 'move');
-    await bounded(input.send('Input.dispatchMouseEvent', { type:'mousePressed', x, y, button:'left', buttons:1, clickCount:1 }), 'press');
-    await bounded(input.send('Input.dispatchMouseEvent', { type:'mouseReleased', x, y, button:'left', buttons:0, clickCount:1 }), 'release');
-  } finally {
-    try { await input.detach(); } catch {}
-  }
+  await bounded(input.send('Input.dispatchMouseEvent', { type:'mouseMoved', x, y, button:'none', buttons:0 }), 'move');
+  await bounded(input.send('Input.dispatchMouseEvent', { type:'mousePressed', x, y, button:'left', buttons:1, clickCount:1 }), 'press');
+  await bounded(input.send('Input.dispatchMouseEvent', { type:'mouseReleased', x, y, button:'left', buttons:0, clickCount:1 }), 'release');
   await page.waitForTimeout(100);
 }`;
 
@@ -34,19 +31,24 @@ try {
     const pattern = /async function nativeClick\(page, locator, label\) \{[\s\S]*?await page\.waitForTimeout\(90\);\r?\n\}/;
     if (!pattern.test(source)) throw new Error('Native-click helper patch target was not found.');
     source = source.replace(pattern, after);
-    fs.writeFileSync(target, source);
   }
+  if (!source.includes('page.__gsCdp = cdp;')) {
+    const cdpPattern = /const cdp = await page\.context\(\)\.newCDPSession\(page\);/;
+    if (!cdpPattern.test(source)) throw new Error('Active CDP session assignment target was not found.');
+    source = source.replace(cdpPattern, "const cdp = await page.context().newCDPSession(page);\n    page.__gsCdp = cdp;");
+  }
+  fs.writeFileSync(target, source);
 
   const check = spawnSync(process.execPath, ['--check', target], { encoding:'utf8' });
   const diagnostic = [
-    'CDP native-click patch applied.',
+    'Reusable CDP native-click patch applied.',
     `syntax_status=${check.status}`,
     check.stdout || '',
     check.stderr || ''
   ].join('\n');
   fs.writeFileSync(path.join(proofDir, 'NATIVE-CLICK-PATCH.txt'), diagnostic);
   if (check.status !== 0) throw new Error(`Patched Windows test failed syntax validation: ${check.stderr || check.stdout}`);
-  console.log('Applied CRLF-safe bounded CDP native-click test helper.');
+  console.log('Applied reusable bounded CDP native-click test helper.');
 } catch (error) {
   fs.writeFileSync(path.join(proofDir, 'NATIVE-CLICK-PATCH-ERROR.txt'), String(error.stack || error));
   throw error;

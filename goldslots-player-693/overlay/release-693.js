@@ -7,6 +7,9 @@
 
   let timer = null;
   let applying = false;
+  let bridgeActive = false;
+  let suppressControl = null;
+  let suppressUntil = 0;
 
   function apply() {
     if (applying) return;
@@ -40,6 +43,50 @@
     clearTimeout(timer);
     timer = setTimeout(apply, 35);
   }
+
+  function controlAt(event) {
+    const selector = 'button,[data-action]';
+    const direct = event.target instanceof Element ? event.target.closest(selector) : null;
+    if (direct && direct.closest('#app')) return direct;
+    for (const element of document.elementsFromPoint(event.clientX, event.clientY)) {
+      const control = element instanceof Element ? element.closest(selector) : null;
+      if (control && control.closest('#app')) return control;
+    }
+    return null;
+  }
+
+  // Electron cabinets can occasionally lose the compatibility click after a real
+  // pointer press. Convert that one trusted physical press into exactly one normal
+  // button activation. This does not repeat wagers or make any game decision.
+  document.addEventListener('pointerdown', (event) => {
+    if (!event.isTrusted || event.button !== 0 || bridgeActive) return;
+    const control = controlAt(event);
+    if (!control || control.disabled || control.getAttribute('aria-disabled') === 'true') return;
+    bridgeActive = true;
+    suppressControl = control;
+    suppressUntil = performance.now() + 800;
+    event.preventDefault();
+    try {
+      control.focus({ preventScroll: true });
+      control.click();
+    } finally {
+      queueMicrotask(() => { bridgeActive = false; });
+    }
+  }, true);
+
+  // Suppress only the duplicate trusted compatibility click that may follow the
+  // bridged pointer press. The programmatic activation above remains the one action.
+  document.addEventListener('click', (event) => {
+    if (!event.isTrusted) return;
+    const active = suppressControl;
+    const sameControl = active && (event.target === active || active.contains(event.target));
+    if (sameControl && performance.now() <= suppressUntil) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+    suppressControl = null;
+    suppressUntil = 0;
+  }, true);
 
   addEventListener('resize', schedule, { passive: true });
   addEventListener('orientationchange', schedule, { passive: true });

@@ -111,7 +111,9 @@ async function verifyLobby(page, width, height) {
     env:{...process.env,GS_PLAYER_UI_TEST:'1',ELECTRON_DISABLE_SECURITY_WARNINGS:'true'},
     timeout:45000
   });
+  let childProcess = null;
   try {
+    try { childProcess = app.process(); } catch {}
     const page = await app.firstWindow();
     page.setDefaultTimeout(10000);
     page.setDefaultNavigationTimeout(10000);
@@ -135,8 +137,8 @@ async function verifyLobby(page, width, height) {
       await page.waitForSelector('.game-shell',{state:'attached'});
       const stage = await page.evaluate((gameKey) => {
         const shell=document.querySelector('.game-shell');
-        const stage=document.querySelector('.game-stage');
-        const rect=stage?.getBoundingClientRect();
+        const stageNode=document.querySelector('.game-stage');
+        const rect=stageNode?.getBoundingClientRect();
         const images=[...document.images].map((image)=>({src:image.getAttribute('src'),complete:image.complete,width:image.naturalWidth,height:image.naturalHeight}));
         const styled=[...document.querySelectorAll('.game-shell *')].map((node)=>getComputedStyle(node).backgroundImage).find((value)=>value&&value.includes('game-screens'))||'';
         return {gameKey,shell:Boolean(shell),rect:rect?{width:rect.width,height:rect.height}:null,images,styled,title:document.querySelector('.game-title h1')?.textContent||''};
@@ -194,8 +196,8 @@ async function verifyLobby(page, width, height) {
     fs.writeFileSync(path.join(PROOF,'WINDOWS-DOM-TEST-PASS.json'),JSON.stringify({label:LABEL,games:GAMES,resolutions:Object.keys(proof),windowState,errors},null,2));
     console.log(`PASS: ${LABEL} original Gold Slots logo, eleven lobby artworks, premium styles, responsive bounds, native clicks, Hi-Lo, Blackjack, Poker and sound.`);
   } finally {
-    try { await Promise.race([app.close(),new Promise((resolve)=>setTimeout(resolve,5000))]); }
-    finally { const child=app.process(); if(child&&child.exitCode==null)child.kill(); }
+    try { await Promise.race([app.close(),new Promise((resolve)=>setTimeout(resolve,5000))]); } catch {}
+    if(childProcess&&childProcess.exitCode==null){try{childProcess.kill();}catch{}}
   }
 })().then(()=>process.exit(0)).catch((error)=>{
   fs.writeFileSync(path.join(PROOF,'TEST-OUTPUT.txt'),String(error.stack||error));

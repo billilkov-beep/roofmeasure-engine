@@ -1,0 +1,56 @@
+{
+  "name": "goldslots-player",
+  "version": "6.9.2",
+  "description": "Gold Slots Player production terminal with manual real-money decisions, responsive layouts and safe policy-controlled kiosk mode.",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test:ui": "node tests/player.e2e.cjs",
+    "dist": "electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "electron": "33.4.11",
+    "electron-builder": "25.1.8",
+    "playwright-core": "1.51.1"
+  },
+  "build": {
+    "appId": "ai.goldslots.player",
+    "productName": "Gold Slots Player",
+    "artifactName": "GoldSlots-Player-Setup-${version}.${ext}",
+    "asar": true,
+    "files": [
+      "main.js",
+      "preload.js",
+      "ui/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "requestedExecutionLevel": "requireAdministrator"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Gold Slots Player",
+      "runAfterFinish": false,
+      "deleteAppDataOnUninstall": false,
+      "differentialPackage": false,
+      "uninstallDisplayName": "Gold Slots Player 6.9.2"
+    }
+  }
+}
